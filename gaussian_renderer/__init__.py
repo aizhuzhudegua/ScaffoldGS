@@ -128,7 +128,11 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     diffuse = diffuse * material[:, 0:1]  # 应用漫反射系数
 
     # 计算高光 (Blinn-Phong)
-    view_dir = -ob_view.unsqueeze(1).repeat(1, pc.n_offsets, 1).view(-1, 3)  # 视角方向
+        # 修复view_dir的维度问题
+    view_dir = -ob_view.unsqueeze(1).repeat(1, pc.n_offsets, 1)  # [N, n_offsets, 3]
+    view_dir = view_dir.view(-1, 3)[mask]  # 只保留mask为True的view_dir
+    view_dir = torch.nn.functional.normalize(view_dir, dim=-1)  # 确保是单位向量
+    
     half_dir = torch.nn.functional.normalize(light_dir + view_dir, dim=-1)
     specular = torch.pow(torch.clamp(torch.sum(normal * half_dir, dim=-1, keepdim=True), 0.0, 1.0), 
                         material[:, 2:3] * 100.0)  # 高光指数
