@@ -22,7 +22,8 @@ from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 from scene.embedding import Embedding
-
+from scene.NVDIFFREC import create_trainable_env_rnd, load_env
+from utils.general_utils import get_minimum_axis, flip_align_view
     
 class GaussianModel:
 
@@ -45,6 +46,8 @@ class GaussianModel:
 
 
     def __init__(self, 
+                 # brdf setting
+                 brdf_dim : int, brdf_mode : str, brdf_envmap_res: int,
                  feat_dim: int=32, 
                  n_offsets: int=5, 
                  voxel_size: float=0.01,
@@ -103,7 +106,7 @@ class GaussianModel:
                 nn.Softmax(dim=1)
             ).cuda()
 
-        self.opacity_dist_dim = 1 if self.add_opacity_dist else 0
+        self.opacity_dist_dim = 1 if self.add_opacity_dist else 0   # 是否添加额外的协方差距离信息
         self.mlp_opacity = nn.Sequential(
             nn.Linear(feat_dim+3+self.opacity_dist_dim, feat_dim),
             nn.ReLU(True),
@@ -127,24 +130,56 @@ class GaussianModel:
             nn.Sigmoid()
         ).cuda()
 
-        # 添加法线预测MLP
-        self.mlp_normal = nn.Sequential(
-            nn.Linear(feat_dim+3+self.color_dist_dim, feat_dim),
-            nn.ReLU(True),
-            nn.Linear(feat_dim, 3*self.n_offsets),
-            nn.Tanh()  # 使用tanh确保法线在[-1,1]范围内
-        ).cuda()
 
-        # 添加材质参数预测MLP (漫反射系数、高光系数、高光指数)
+        # brdf setting
+        self.brdf_dim = brdf_dim  
+        self.brdf_mode = brdf_mode  
+        self.brdf_envmap_res = brdf_envmap_res  
+
+        # 可能要用mlp
+        # 修改为（每个锚点的每个偏移点都有BRDF参数）
+        self._normals = torch.empty(0)  # [N, n_offsets, 3]
+        self._normals2 = torch.empty(0) # [N, n_offsets, 3]
+        self._speculars = torch.empty(0) # [N, n_offsets, 3]
+        self._roughnesses = torch.empty(0) # [N, n_offsets, 1]
+
+        # 材质参数预测MLP
         self.mlp_material = nn.Sequential(
-            nn.Linear(feat_dim+3+self.color_dist_dim, feat_dim),
+            nn.Linear(self.feat_dim+3, self.feat_dim),
             nn.ReLU(True),
-            nn.Linear(feat_dim, 3*self.n_offsets),  # [kd, ks, shininess]
-            nn.Sigmoid()  # 确保材质参数在[0,1]范围内
+            nn.Linear(self.feat_dim, 4*self.n_offsets),  # [diffuse, specular, roughness]
+            nn.Sigmoid()
         ).cuda()
 
-        # 添加可学习的光源方向参数
-        self.light_direction = nn.Parameter(torch.tensor([0.0, 1.0, 0.0], device='cuda'))
+        # 创建可训练的BRDF环境  
+        self.brdf_mlp = create_trainable_env_rnd(self.brdf_envmap_res, scale=0.0, bias=0.8)
+        
+
+        self.diffuse_activation = torch.sigmoid
+        self.specular_activation = torch.sigmoid
+        self.default_roughness = 0.0
+        self.roughness_activation = torch.sigmoid
+        self.roughness_bias = 0.
+        self.default_roughness = 0.6
+
+        # 添加法线预测MLP
+        # self.mlp_normal = nn.Sequential(
+        #     nn.Linear(feat_dim+3+self.color_dist_dim, feat_dim),
+        #     nn.ReLU(True),
+        #     nn.Linear(feat_dim, 3*self.n_offsets),
+        #     nn.Tanh()  # 使用tanh确保法线在[-1,1]范围内
+        # ).cuda()
+
+        # # 添加材质参数预测MLP (漫反射系数、高光系数、高光指数)
+        # self.mlp_material = nn.Sequential(
+        #     nn.Linear(feat_dim+3+self.color_dist_dim, feat_dim),
+        #     nn.ReLU(True),
+        #     nn.Linear(feat_dim, 3*self.n_offsets),  # [kd, ks, shininess]
+        #     nn.Sigmoid()  # 确保材质参数在[0,1]范围内
+        # ).cuda()
+
+        # # 添加可学习的光源方向参数
+        # self.light_direction = nn.Parameter(torch.tensor([0.0, 1.0, 0.0], device='cuda'))
 
     def eval(self):
         self.mlp_opacity.eval()
@@ -198,6 +233,27 @@ class GaussianModel:
         if self.appearance_dim > 0:
             self.embedding_appearance = Embedding(num_cameras, self.appearance_dim).cuda()
 
+    def get_brdf_properties(self, anchor_feat, anchor_pos):
+        # 预测法线
+        normal_input = torch.cat([anchor_feat, anchor_pos], dim=-1)
+        normals = self.mlp_normal(normal_input).view(-1, self.n_offsets, 3)
+        
+        # 预测材质参数
+        material_input = torch.cat([anchor_feat, anchor_pos], dim=-1)
+        materials = self.mlp_material(material_input).view(-1, self.n_offsets, 4)
+        
+        diffuse = materials[..., 0:3]  # [N, n_offsets, 3]
+        specular = materials[..., 3:4]  # [N, n_offsets, 1]
+        roughness = materials[..., 4:5]  # [N, n_offsets, 1]
+        
+        return {
+            'normals': normals,
+            'diffuse': diffuse,
+            'specular': specular,
+            'roughness': roughness
+        }
+    
+
     @property
     def get_appearance(self):
         return self.embedding_appearance
@@ -250,10 +306,12 @@ class GaussianModel:
         
         return data
 
+    # 从体素建立锚点
     def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):
         self.spatial_lr_scale = spatial_lr_scale
-        points = pcd.points[::self.ratio]
+        points = pcd.points[::self.ratio]  # 按照ratio进行降采样
 
+        # 一般不会执行这里，会设置voxel_size
         if self.voxel_size <= 0:
             init_points = torch.tensor(points).float().cuda()
             init_dist = distCUDA2(init_points).float().cuda()
@@ -281,14 +339,23 @@ class GaussianModel:
 
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
 
-        self._anchor = nn.Parameter(fused_point_cloud.requires_grad_(True))
-        self._offset = nn.Parameter(offsets.requires_grad_(True))
-        self._anchor_feat = nn.Parameter(anchors_feat.requires_grad_(True))
-        self._scaling = nn.Parameter(scales.requires_grad_(True))
-        self._rotation = nn.Parameter(rots.requires_grad_(False))
-        self._opacity = nn.Parameter(opacities.requires_grad_(False))
-        self.max_radii2D = torch.zeros((self.get_anchor.shape[0]), device="cuda")
+        self._anchor = nn.Parameter(fused_point_cloud.requires_grad_(True)) # [n, 3]，其中 n 是体素化后的点数量，3 表示每个点的 xyz 坐标
+        self._offset = nn.Parameter(offsets.requires_grad_(True)) # [n, 5, 3]，其中 n 是体素化后的点数量，3 表示每个点的 xyz 坐标，5 表示每个点有5个偏移量
+        self._anchor_feat = nn.Parameter(anchors_feat.requires_grad_(True)) # [n, 32]，其中 n 是体素化后的点数量，32 表示每个锚点点的特征维度
+        self._scaling = nn.Parameter(scales.requires_grad_(True)) # [n, 6]，其中 n 是体素化后的点数量，6 表示每个点的缩放因子
+        self._rotation = nn.Parameter(rots.requires_grad_(False)) # [n, 4]，其中 n 是体素化后的点数量，4 表示每个点的旋转四元数
+        self._opacity = nn.Parameter(opacities.requires_grad_(False)) # [n, 1]，其中 n 是体素化后的点数量，1 表示每个点的透明度
+        self.max_radii2D = torch.zeros((self.get_anchor.shape[0]), device="cuda") # [n] 每个锚点的高斯点在2D投影平面上的最大半径
 
+        normals = np.zeros((fused_point_cloud.shape[0], self.n_offsets, 3), dtype=np.float32)
+        normals2 = np.zeros_like(normals)
+        speculars = np.zeros((fused_point_cloud.shape[0], self.n_offsets, 3), dtype=np.float32)
+        roughnesses = np.full((fused_point_cloud.shape[0], self.n_offsets, 1), self.default_roughness, dtype=np.float32)
+        
+        self._normals = nn.Parameter(torch.from_numpy(normals).to(self._xyz.device).requires_grad_(True))
+        self._normals2 = nn.Parameter(torch.from_numpy(normals2).to(self._xyz.device).requires_grad_(True))
+        self._speculars = nn.Parameter(torch.from_numpy(speculars).to(self._xyz.device).requires_grad_(True))
+        self._roughnesses = nn.Parameter(torch.from_numpy(roughnesses).to(self._xyz.device).requires_grad_(True))
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -478,6 +545,8 @@ class GaussianModel:
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+
+        
 
 
     def replace_tensor_to_optimizer(self, tensor, name):
@@ -829,13 +898,25 @@ class GaussianModel:
         else:
             raise NotImplementedError
 
-    @property
-    def get_normal_mlp(self):
-        return self.mlp_normal
+    def get_normal(self, dir_pp_normalized=None, return_delta=False):
+        normal_axis = self.get_minimum_axis
+        normal_axis = normal_axis
+        normal_axis, positive = flip_align_view(normal_axis, dir_pp_normalized)
+        delta_normal1 = self._normal  # (N, 3) 
+        delta_normal2 = self._normal2 # (N, 3) 
+        delta_normal = torch.stack([delta_normal1, delta_normal2], dim=-1) # (N, 3, 2)
+        idx = torch.where(positive, 0, 1).long()[:,None,:].repeat(1, 3, 1) # (N, 3, 1)
+        delta_normal = torch.gather(delta_normal, index=idx, dim=-1).squeeze(-1) # (N, 3)
+        normal = delta_normal + normal_axis 
+        normal = normal/normal.norm(dim=1, keepdim=True) # (N, 3)
+        if return_delta:
+            return normal, delta_normal
+        else:
+            return normal
 
-    @property
-    def get_material_mlp(self):
-        return self.mlp_material
+    # @property
+    # def get_material_mlp(self):
+    #     return self.mlp_material
 
     def get_light_direction(self):
         return torch.nn.functional.normalize(self.light_direction, dim=-1)
