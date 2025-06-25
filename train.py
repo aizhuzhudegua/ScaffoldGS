@@ -127,6 +127,8 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
             viewpoint_stack = scene.getTrainCameras().copy()
         viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
 
+        gaussians.brdf_mlp.build_mips()
+
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
@@ -135,6 +137,10 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
         retain_grad = (iteration < opt.update_until and iteration >= 0)
         render_pkg = render(viewpoint_cam, gaussians, pipe, background, visible_mask=voxel_visible_mask, retain_grad=retain_grad)
         
+        # print("Debug-----------------------" )
+        # print(render_pkg)
+        
+
         image, viewspace_point_tensor, visibility_filter, offset_selection_mask, radii, scaling, opacity = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["selection_mask"], render_pkg["radii"], render_pkg["scaling"], render_pkg["neural_opacity"]
 
         # 额外loss

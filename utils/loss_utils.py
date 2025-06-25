@@ -13,6 +13,9 @@ import torch
 import torch.nn.functional as F
 from torch.autograd import Variable
 from math import exp
+from utils.image_utils import erode
+import numpy as np 
+
 
 def l1_loss(network_output, gt):
     return torch.abs((network_output - gt)).mean()

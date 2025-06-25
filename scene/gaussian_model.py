@@ -148,7 +148,6 @@ class GaussianModel:
 
         # 创建可训练的BRDF环境  
         self.brdf_mlp = create_trainable_env_rnd(self.brdf_envmap_res, scale=0.0, bias=0.8)
-        
 
         self.diffuse_activation = torch.sigmoid
         self.specular_activation = torch.sigmoid
@@ -1085,8 +1084,8 @@ class GaussianModel:
         normal_axis = get_minimum_axis(scaling, rotation)
         normal_axis = normal_axis
         normal_axis, positive = flip_align_view(normal_axis, dir_pp_normalized)
-        delta_normal1 = self._normal  # (N, 3) 
-        delta_normal2 = self._normal2 # (N, 3) 
+        # delta_normal1 = self._normal  # (N, 3) 
+        # delta_normal2 = self._normal2 # (N, 3) 
         delta_normal = torch.stack([delta_normal1, delta_normal2], dim=-1) # (N, 3, 2)
         idx = torch.where(positive, 0, 1).long()[:,None,:].repeat(1, 3, 1) # (N, 3, 1)
         delta_normal = torch.gather(delta_normal, index=idx, dim=-1).squeeze(-1) # (N, 3)
