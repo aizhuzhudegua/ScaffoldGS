@@ -46,6 +46,7 @@ class GaussianModel:
 
 
     def __init__(self, 
+                 sh_degree : int,
                  # brdf setting
                  brdf_dim : int, brdf_mode : str, brdf_envmap_res: int,
                  feat_dim: int=32, 
@@ -140,11 +141,10 @@ class GaussianModel:
 
         # 可能要用mlp
         # 修改为（每个锚点的每个偏移点都有BRDF参数）
-        self._normals = torch.empty(0)  # [N, n_offsets, 3]
-        self._normals2 = torch.empty(0) # [N, n_offsets, 3]
-        self._speculars = torch.empty(0) # [N, n_offsets, 3]
-        self._roughnesses = torch.empty(0) # [N, n_offsets, 1]
-
+        # self._normals = torch.empty(0)  # [N, n_offsets, 3]
+        # self._normals2 = torch.empty(0) # [N, n_offsets, 3]
+        # self._speculars = torch.empty(0) # [N, n_offsets, 3]
+        # self._roughnesses = torch.empty(0) # [N, n_offsets, 1]
 
         # 创建可训练的BRDF环境  
         self.brdf_mlp = create_trainable_env_rnd(self.brdf_envmap_res, scale=0.0, bias=0.8)
@@ -153,18 +153,11 @@ class GaussianModel:
         self.diffuse_activation = torch.sigmoid
         self.specular_activation = torch.sigmoid
         self.default_roughness = 0.0
+
         self.roughness_activation = torch.sigmoid
         self.roughness_bias = 0.
         self.default_roughness = 0.6
 
-        
-        # 材质参数预测MLP
-        self.mlp_material = nn.Sequential(
-            nn.Linear(self.feat_dim+3, self.feat_dim),
-            nn.ReLU(True),
-            nn.Linear(self.feat_dim, 4*self.n_offsets),  # [diffuse, specular, roughness]
-            nn.Sigmoid()
-        ).cuda()
 
         # 定义两个 MLP 分别用于生成 _normals 和 _normals2
         self.mlp_normal1 = nn.Sequential(
@@ -197,6 +190,14 @@ class GaussianModel:
             nn.Sigmoid()  # 使用 sigmoid 确保粗糙度在 [0, 1] 范围内
         ).cuda()
 
+        # 定义 MLP 用于生成残差色项
+        self.mlp_features_rest = nn.Sequential(
+            nn.Linear(feat_dim + 3, feat_dim),
+            nn.ReLU(True),
+            nn.Linear(feat_dim, 3 * n_offsets),
+            nn.Sigmoid() 
+        ).cuda()
+
         # 添加法线预测MLP
         # self.mlp_normal = nn.Sequential(
         #     nn.Linear(feat_dim+3+self.color_dist_dim, feat_dim),
@@ -220,6 +221,14 @@ class GaussianModel:
         self.mlp_opacity.eval()
         self.mlp_cov.eval()
         self.mlp_color.eval()
+
+        # 额外mlp
+        self.mlp_specular.eval()
+        self.mlp_roughness.eval()
+        self.mlp_normal1.eval()
+        self.mlp_normal2.eval()
+        self.mlp_features_rest.eval()
+
         if self.appearance_dim > 0:
             self.embedding_appearance.eval()
         if self.use_feat_bank:
@@ -229,6 +238,13 @@ class GaussianModel:
         self.mlp_opacity.train()
         self.mlp_cov.train()
         self.mlp_color.train()
+
+        # 额外的参数
+        self.mlp_specular.train()
+        self.mlp_roughness.train()
+        self.mlp_normal1.train()
+        self.mlp_normal2.train()
+
         if self.appearance_dim > 0:
             self.embedding_appearance.train()
         if self.use_feat_bank:                   
@@ -268,25 +284,25 @@ class GaussianModel:
         if self.appearance_dim > 0:
             self.embedding_appearance = Embedding(num_cameras, self.appearance_dim).cuda()
 
-    def get_brdf_properties(self, anchor_feat, anchor_pos):
-        # 预测法线
-        normal_input = torch.cat([anchor_feat, anchor_pos], dim=-1)
-        normals = self.mlp_normal(normal_input).view(-1, self.n_offsets, 3)
+    # def get_brdf_properties(self, anchor_feat, anchor_pos):
+    #     # 预测法线
+    #     normal_input = torch.cat([anchor_feat, anchor_pos], dim=-1)
+    #     normals = self.mlp_normal(normal_input).view(-1, self.n_offsets, 3)
         
-        # 预测材质参数
-        material_input = torch.cat([anchor_feat, anchor_pos], dim=-1)
-        materials = self.mlp_material(material_input).view(-1, self.n_offsets, 4)
+    #     # 预测材质参数
+    #     material_input = torch.cat([anchor_feat, anchor_pos], dim=-1)
+    #     materials = self.mlp_material(material_input).view(-1, self.n_offsets, 4)
         
-        diffuse = materials[..., 0:3]  # [N, n_offsets, 3]
-        specular = materials[..., 3:4]  # [N, n_offsets, 1]
-        roughness = materials[..., 4:5]  # [N, n_offsets, 1]
+    #     diffuse = materials[..., 0:3]  # [N, n_offsets, 3]
+    #     specular = materials[..., 3:4]  # [N, n_offsets, 1]
+    #     roughness = materials[..., 4:5]  # [N, n_offsets, 1]
         
-        return {
-            'normals': normals,
-            'diffuse': diffuse,
-            'specular': specular,
-            'roughness': roughness
-        }
+    #     return {
+    #         'normals': normals,
+    #         'diffuse': diffuse,
+    #         'specular': specular,
+    #         'roughness': roughness
+    #     }
     
 
     @property
@@ -312,6 +328,30 @@ class GaussianModel:
     @property
     def get_color_mlp(self):
         return self.mlp_color
+    
+
+    # mlp
+    @property
+    def get_specular_mlp(self):
+        return self.mlp_specular
+    
+    @property
+    def get_roughness_mlp(self):
+        return self.mlp_roughness
+    
+    @property
+    def get_normal1_mlp(self):
+        return self.mlp_normal1
+    
+    @property
+    def get_normal2_mlp(self):
+        return self.mlp_normal2
+    
+    @property
+    def get_features_rest_mlp(self):
+        return self.mlp_features_rest
+    
+
     
     @property
     def get_rotation(self):
@@ -382,16 +422,16 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(False)) # [n, 1]，其中 n 是体素化后的点数量，1 表示每个点的透明度
         self.max_radii2D = torch.zeros((self.get_anchor.shape[0]), device="cuda") # [n] 每个锚点的高斯点在2D投影平面上的最大半径
 
-        normals = np.zeros((fused_point_cloud.shape[0], self.n_offsets, 3), dtype=np.float32)
-        normals2 = np.zeros_like(normals)
-        speculars = np.zeros((fused_point_cloud.shape[0], self.n_offsets, 3), dtype=np.float32)
-        roughnesses = np.full((fused_point_cloud.shape[0], self.n_offsets, 1), self.default_roughness, dtype=np.float32)
+        # normals = np.zeros((fused_point_cloud.shape[0], self.n_offsets, 3), dtype=np.float32)
+        # normals2 = np.zeros_like(normals)
+        # speculars = np.zeros((fused_point_cloud.shape[0], self.n_offsets, 3), dtype=np.float32)
+        # roughnesses = np.full((fused_point_cloud.shape[0], self.n_offsets, 1), self.default_roughness, dtype=np.float32)
         
         
-        self._normals = nn.Parameter(torch.from_numpy(normals).to(self._xyz.device).requires_grad_(True))
-        self._normals2 = nn.Parameter(torch.from_numpy(normals2).to(self._xyz.device).requires_grad_(True))
-        self._speculars = nn.Parameter(torch.from_numpy(speculars).to(self._xyz.device).requires_grad_(True))
-        self._roughnesses = nn.Parameter(torch.from_numpy(roughnesses).to(self._xyz.device).requires_grad_(True))
+        # self._normals = nn.Parameter(torch.from_numpy(normals).to(self._xyz.device).requires_grad_(True))
+        # self._normals2 = nn.Parameter(torch.from_numpy(normals2).to(self._xyz.device).requires_grad_(True))
+        # self._speculars = nn.Parameter(torch.from_numpy(speculars).to(self._xyz.device).requires_grad_(True))
+        # self._roughnesses = nn.Parameter(torch.from_numpy(roughnesses).to(self._xyz.device).requires_grad_(True))
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -445,6 +485,13 @@ class GaussianModel:
                 {'params': self.mlp_opacity.parameters(), 'lr': training_args.mlp_opacity_lr_init, "name": "mlp_opacity"},
                 {'params': self.mlp_cov.parameters(), 'lr': training_args.mlp_cov_lr_init, "name": "mlp_cov"},
                 {'params': self.mlp_color.parameters(), 'lr': training_args.mlp_color_lr_init, "name": "mlp_color"},
+
+                # 添加的mlp
+                {'params': self.mlp_specular.parameters(), 'lr': training_args.mlp_specular_lr_init, "name": "mlp_specular"},
+                {'params': self.mlp_roughness.parameters(), 'lr': training_args.mlp_roughness_lr_init, "name": "mlp_roughness"},
+                {'params': self.mlp_normal1.parameters(), 'lr': training_args.mlp_normal1_lr_init, "name": "mlp_normal1"},
+                {'params': self.mlp_normal2.parameters(), 'lr': training_args.mlp_normal2_lr_init, "name": "mlp_normal2"},
+                {'params': self.mlp_features_rest.parameters(), 'lr': training_args.mlp_features_rest_lr_init, "name": "mlp_features_rest"},
             ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
@@ -471,6 +518,35 @@ class GaussianModel:
                                                     lr_final=training_args.mlp_color_lr_final,
                                                     lr_delay_mult=training_args.mlp_color_lr_delay_mult,
                                                     max_steps=training_args.mlp_color_lr_max_steps)
+        
+        # 额外添加的mlp
+        self.mlp_specular_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_specular_lr_init,
+                                                    lr_final=training_args.mlp_specular_lr_final,
+                                                    lr_delay_mult=training_args.mlp_specular_lr_delay_mult,
+                                                    max_steps=training_args.mlp_specular_lr_max_steps)
+        
+        self.mlp_roughness_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_roughness_lr_init,
+                                                    lr_final=training_args.mlp_roughness_lr_final,
+                                                    lr_delay_mult=training_args.mlp_roughness_lr_delay_mult,
+                                                    max_steps=training_args.mlp_roughness_lr_max_steps)
+        
+        self.mlp_normal1_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_normal1_lr_init,
+                                                    lr_final=training_args.mlp_normal1_lr_final,
+                                                    lr_delay_mult=training_args.mlp_normal1_lr_delay_mult,
+                                                    max_steps=training_args.mlp_normal1_lr_max_steps)
+        
+        self.mlp_normal2_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_normal2_lr_init,
+                                                    lr_final=training_args.mlp_normal2_lr_final,
+                                                    lr_delay_mult=training_args.mlp_normal2_lr_delay_mult,
+                                                    max_steps=training_args.mlp_normal2_lr_max_steps)
+        
+        self.mlp_features_rest_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_features_rest_lr_init,
+                                                    lr_final=training_args.mlp_features_rest_lr_final,
+                                                    lr_delay_mult=training_args.mlp_features_rest_lr_delay_mult,
+                                                    max_steps=training_args.mlp_features_rest_lr_max_steps)
+        # 额外添加的mlp
+
+
         if self.use_feat_bank:
             self.mlp_featurebank_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_featurebank_lr_init,
                                                         lr_final=training_args.mlp_featurebank_lr_final,
@@ -500,6 +576,24 @@ class GaussianModel:
             if param_group["name"] == "mlp_color":
                 lr = self.mlp_color_scheduler_args(iteration)
                 param_group['lr'] = lr
+
+            # 额外添加的mlp
+            if param_group["name"] == "mlp_specular":
+                lr = self.mlp_specular_scheduler_args(iteration)
+                param_group['lr'] = lr
+            if param_group["name"] == "mlp_roughness":
+                lr = self.mlp_roughness_scheduler_args(iteration)
+                param_group['lr'] = lr
+            if param_group["name"] == "mlp_normal1":
+                lr = self.mlp_normal1_scheduler_args(iteration)
+                param_group['lr'] = lr
+            if param_group["name"] == "mlp_normal2":
+                lr = self.mlp_normal2_scheduler_args(iteration)
+                param_group['lr'] = lr
+            if param_group["name"] == "mlp_features_rest":
+                lr = self.mlp_features_rest_scheduler_args(iteration)
+                param_group['lr'] = lr
+
             if self.use_feat_bank and param_group["name"] == "mlp_featurebank":
                 lr = self.mlp_featurebank_scheduler_args(iteration)
                 param_group['lr'] = lr
@@ -521,6 +615,7 @@ class GaussianModel:
             l.append('rot_{}'.format(i))
         return l
 
+    # 保存锚点属性
     def save_ply(self, path):
         mkdir_p(os.path.dirname(path))
 
@@ -584,7 +679,7 @@ class GaussianModel:
 
         
 
-
+    # 未使用
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -653,7 +748,7 @@ class GaussianModel:
 
         
 
-        
+    # 修剪优化器中的锚点  
     def _prune_anchor_optimizer(self, mask):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -871,6 +966,8 @@ class GaussianModel:
 
     def save_mlp_checkpoints(self, path, mode = 'split'):#split or unite
         mkdir_p(os.path.dirname(path))
+
+        # 执行这里
         if mode == 'split':
             self.mlp_opacity.eval()
             opacity_mlp = torch.jit.trace(self.mlp_opacity, (torch.rand(1, self.feat_dim+3+self.opacity_dist_dim).cuda()))
@@ -886,6 +983,33 @@ class GaussianModel:
             color_mlp = torch.jit.trace(self.mlp_color, (torch.rand(1, self.feat_dim+3+self.color_dist_dim+self.appearance_dim).cuda()))
             color_mlp.save(os.path.join(path, 'color_mlp.pt'))
             self.mlp_color.train()
+
+            # 额外的 mlp
+            self.mlp_roughness.eval()
+            roughness_mlp = torch.jit.trace(self.mlp_roughness, (torch.rand(1, self.feat_dim+1).cuda()))
+            roughness_mlp.save(os.path.join(path, 'roughness_mlp.pt'))
+            self.mlp_roughness.train()
+
+            self.mlp_specular.eval()
+            specular_mlp = torch.jit.trace(self.mlp_specular, (torch.rand(1, self.feat_dim+3).cuda()))
+            specular_mlp.save(os.path.join(path,'specular_mlp.pt'))
+            self.mlp_specular.train()
+
+            self.mlp_normal1.eval()
+            normal1_mlp = torch.jit.trace(self.mlp_normal1, (torch.rand(1, self.feat_dim+3).cuda()))
+            normal1_mlp.save(os.path.join(path, 'normal1_mlp.pt'))
+            self.mlp_normal1.train()
+
+            self.mlp_normal2.eval()
+            normal2_mlp = torch.jit.trace(self.mlp_normal2, (torch.rand(1, self.feat_dim+3).cuda()))
+            normal2_mlp.save(os.path.join(path, 'normal2_mlp.pt'))
+            self.mlp_normal2.train()
+
+            self.mlp_features_rest.eval()
+            features_rest_mlp = torch.jit.trace(self.mlp_features_rest, (torch.rand(1, self.feat_dim+3).cuda()))
+            features_rest_mlp.save(os.path.join(path, 'features_rest_mlp.pt'))
+            self.mlp_features_rest.train()
+
 
             if self.use_feat_bank:
                 self.mlp_feature_bank.eval()
@@ -926,10 +1050,20 @@ class GaussianModel:
 
 
     def load_mlp_checkpoints(self, path, mode = 'split'):#split or unite
+
+        # 执行这里
         if mode == 'split':
             self.mlp_opacity = torch.jit.load(os.path.join(path, 'opacity_mlp.pt')).cuda()
             self.mlp_cov = torch.jit.load(os.path.join(path, 'cov_mlp.pt')).cuda()
             self.mlp_color = torch.jit.load(os.path.join(path, 'color_mlp.pt')).cuda()
+
+            # 额外的 mlp
+            self.mlp_roughness = torch.jit.load(os.path.join(path, 'roughness_mlp.pt')).cuda()
+            self.mlp_specular = torch.jit.load(os.path.join(path,'specular_mlp.pt')).cuda()
+            self.mlp_normal1 = torch.jit.load(os.path.join(path, 'normal1_mlp.pt')).cuda()
+            self.mlp_normal2 = torch.jit.load(os.path.join(path, 'normal2_mlp.pt')).cuda()
+            self.mlp_features_rest = torch.jit.load(os.path.join(path, 'features_rest_mlp.pt')).cuda()
+
             if self.use_feat_bank:
                 self.mlp_feature_bank = torch.jit.load(os.path.join(path, 'feature_bank_mlp.pt')).cuda()
             if self.appearance_dim > 0:
@@ -947,8 +1081,8 @@ class GaussianModel:
             raise NotImplementedError
 
     # 获取法向，最短轴法
-    def get_normal(self, dir_pp_normalized=None, return_delta=False):
-        normal_axis = self.get_minimum_axis
+    def get_normal(self,delta_normal1, delta_normal2,scaling,rotation,dir_pp_normalized=None, return_delta=False):
+        normal_axis = get_minimum_axis(scaling, rotation)
         normal_axis = normal_axis
         normal_axis, positive = flip_align_view(normal_axis, dir_pp_normalized)
         delta_normal1 = self._normal  # (N, 3) 
@@ -967,9 +1101,9 @@ class GaussianModel:
     # def get_material_mlp(self):
     #     return self.mlp_material
 
-    @property 
-    def get_minimum_axis(self):
-        return get_minimum_axis(self.get_scaling, self.get_rotation)
+    # @property 
+    # def get_minimum_axis(self):
+    #     return get_minimum_axis(self.get_scaling, self.get_rotation)
 
 
     # def get_light_direction(self):

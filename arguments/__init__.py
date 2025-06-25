@@ -89,6 +89,7 @@ class PipelineParams(ParamGroup):
         self.compute_cov3D_python = False
         self.debug = False
         super().__init__(parser, "Pipeline Parameters")
+        self.brdf = False
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
@@ -133,6 +134,34 @@ class OptimizationParams(ParamGroup):
         self.mlp_featurebank_lr_final = 0.00001
         self.mlp_featurebank_lr_delay_mult = 0.01
         self.mlp_featurebank_lr_max_steps = 30_000
+
+
+        # 额外mlp的学习率 ------------------
+        self.mlp_specular_lr_init = 0.002
+        self.mlp_specular_lr_final = 0.00002  
+        self.mlp_specular_lr_delay_mult = 0.01
+        self.mlp_specular_lr_max_steps = 30_000
+
+        self.mlp_roughness_lr_init = 0.002
+        self.mlp_roughness_lr_final = 0.00002  
+        self.mlp_roughness_lr_delay_mult = 0.01
+        self.mlp_roughness_lr_max_steps = 30_000
+
+        self.mlp_normal1_lr_init = 0.002
+        self.mlp_normal1_lr_final = 0.00002  
+        self.mlp_normal1_lr_delay_mult = 0.01
+        self.mlp_normal1_lr_max_steps = 30_000
+
+        self.mlp_normal2_lr_init = 0.002
+        self.mlp_normal2_lr_final = 0.00002  
+        self.mlp_normal2_lr_delay_mult = 0.01
+        self.mlp_normal2_lr_max_steps = 30_000
+
+        self.mlp_features_rest_lr_init = 0.002
+        self.mlp_features_rest_lr_final = 0.00002  
+        self.mlp_features_rest_lr_delay_mult = 0.01
+        self.mlp_features_rest_lr_max_steps = 30_000
+        # 额外mlp的学习率 ------------------
 
         self.appearance_lr_init = 0.05
         self.appearance_lr_final = 0.0005

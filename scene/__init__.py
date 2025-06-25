@@ -49,7 +49,7 @@ class Scene:
         else:
             assert False, "Could not recognize scene type!"
 
-        self.gaussians.set_appearance(len(scene_info.train_cameras))
+        self.gaussians.set_appearance(len(scene_info.train_cameras)) # TODO
         
         if not self.loaded_iter:
             if ply_path is not None:
