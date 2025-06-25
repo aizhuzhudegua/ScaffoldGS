@@ -137,29 +137,54 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     else:
         xyz, diffuse_color, opacity, scaling, rot, normal, material, ob_view = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
 
-    # 计算光照
-    # 使用可学习的光源方向
-    light_dir = pc.get_light_direction()
-    light_dir = light_dir.unsqueeze(0).expand(xyz.shape[0], -1)  # 扩展到所有点
+    # # 计算光照
+    # # 使用可学习的光源方向
+    # light_dir = pc.get_light_direction()
+    # light_dir = light_dir.unsqueeze(0).expand(xyz.shape[0], -1)  # 扩展到所有点
 
-    # 计算漫反射
-    diffuse = torch.clamp(torch.sum(normal * light_dir, dim=-1, keepdim=True), 0.0, 1.0)
-    diffuse = diffuse * material[:, 0:1]  # 应用漫反射系数
+    # # 计算漫反射
+    # diffuse = torch.clamp(torch.sum(normal * light_dir, dim=-1, keepdim=True), 0.0, 1.0)
+    # diffuse = diffuse * material[:, 0:1]  # 应用漫反射系数
 
-    # 计算高光 (Blinn-Phong)
-    view_dir = -ob_view.unsqueeze(1).repeat(1, pc.n_offsets, 1)  # [N, n_offsets, 3]
-    view_dir = view_dir.view(-1, 3)[mask] if is_training else view_dir.view(-1, 3)  # 只保留mask为True的view_dir
-    view_dir = torch.nn.functional.normalize(view_dir, dim=-1)  # 确保是单位向量
+    # # 计算高光 (Blinn-Phong)
+    # view_dir = -ob_view.unsqueeze(1).repeat(1, pc.n_offsets, 1)  # [N, n_offsets, 3]
+    # view_dir = view_dir.view(-1, 3)[mask] if is_training else view_dir.view(-1, 3)  # 只保留mask为True的view_dir
+    # view_dir = torch.nn.functional.normalize(view_dir, dim=-1)  # 确保是单位向量
     
-    half_dir = torch.nn.functional.normalize(light_dir + view_dir, dim=-1)
-    specular = torch.pow(torch.clamp(torch.sum(normal * half_dir, dim=-1, keepdim=True), 0.0, 1.0), 
-                        material[:, 2:3] * 100.0)  # 高光指数
-    specular = specular * material[:, 1:2]  # 应用高光系数
+    # half_dir = torch.nn.functional.normalize(light_dir + view_dir, dim=-1)
+    # specular = torch.pow(torch.clamp(torch.sum(normal * half_dir, dim=-1, keepdim=True), 0.0, 1.0), 
+    #                     material[:, 2:3] * 100.0)  # 高光指数
+    # specular = specular * material[:, 1:2]  # 应用高光系数
 
-    # 计算最终颜色
-    color = diffuse_color * (diffuse + 0.1) + specular  # 0.1是环境光
+    # # 计算最终颜色
+    # color = diffuse_color * (diffuse + 0.1) + specular  # 0.1是环境光
 
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
+
+    # 执行这里的shading
+    gb_pos = xyz # (N*k, 3) 
+    view_pos = viewpoint_camera.camera_center.repeat(pc.get_opacity.shape[0], 1) # (N, 3) 
+
+    diffuse   = pc.get_diffuse # (N, 3) 
+    normal, delta_normal = pc.get_normal(dir_pp_normalized=dir_pp_normalized, return_delta=True) # (N, 3) 
+    delta_normal_norm = delta_normal.norm(dim=1, keepdim=True)
+    specular  = pc.get_specular # (N, 3) 
+    roughness = pc.get_roughness # (N, 1) 
+    color, brdf_pkg = pc.brdf_mlp.shade(gb_pos[None, None, ...], normal[None, None, ...], diffuse[None, None, ...], specular[None, None, ...], roughness[None, None, ...], view_pos[None, None, ...])
+
+    colors_precomp = color.squeeze() # (N, 3) 
+    # diffuse_color = brdf_pkg['diffuse'].squeeze() # (N, 3) 
+    # specular_color = brdf_pkg['specular'].squeeze() # (N, 3) 
+
+    if pc.brdf_dim>0:
+        shs_view = pc.get_brdf_features.view(-1, 3, (pc.brdf_dim+1)**2)
+        dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_opacity.shape[0], 1))
+        dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
+        sh2rgb = eval_sh(pc.brdf_dim, shs_view, dir_pp_normalized)
+        color_delta = sh2rgb
+        colors_precomp += color_delta
+
+
     screenspace_points = torch.zeros_like(xyz, dtype=pc.get_anchor.dtype, requires_grad=True, device="cuda") + 0
     if retain_grad:
         try:

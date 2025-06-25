@@ -122,6 +122,8 @@ class GaussianModel:
             nn.Linear(feat_dim, 7*self.n_offsets),
         ).cuda()
 
+
+        # 为什么还需要额外的32维特征 self.appearance_dim
         self.color_dist_dim = 1 if self.add_color_dist else 0
         self.mlp_color = nn.Sequential(
             nn.Linear(feat_dim+3+self.color_dist_dim+self.appearance_dim, feat_dim),
@@ -143,13 +145,6 @@ class GaussianModel:
         self._speculars = torch.empty(0) # [N, n_offsets, 3]
         self._roughnesses = torch.empty(0) # [N, n_offsets, 1]
 
-        # 材质参数预测MLP
-        self.mlp_material = nn.Sequential(
-            nn.Linear(self.feat_dim+3, self.feat_dim),
-            nn.ReLU(True),
-            nn.Linear(self.feat_dim, 4*self.n_offsets),  # [diffuse, specular, roughness]
-            nn.Sigmoid()
-        ).cuda()
 
         # 创建可训练的BRDF环境  
         self.brdf_mlp = create_trainable_env_rnd(self.brdf_envmap_res, scale=0.0, bias=0.8)
@@ -161,6 +156,46 @@ class GaussianModel:
         self.roughness_activation = torch.sigmoid
         self.roughness_bias = 0.
         self.default_roughness = 0.6
+
+        
+        # 材质参数预测MLP
+        self.mlp_material = nn.Sequential(
+            nn.Linear(self.feat_dim+3, self.feat_dim),
+            nn.ReLU(True),
+            nn.Linear(self.feat_dim, 4*self.n_offsets),  # [diffuse, specular, roughness]
+            nn.Sigmoid()
+        ).cuda()
+
+        # 定义两个 MLP 分别用于生成 _normals 和 _normals2
+        self.mlp_normal1 = nn.Sequential(
+            nn.Linear(feat_dim + 3, feat_dim),
+            nn.ReLU(True),
+            nn.Linear(feat_dim, 3 * n_offsets),
+            nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
+        ).cuda()
+
+        self.mlp_normal2 = nn.Sequential(
+            nn.Linear(feat_dim + 3, feat_dim),
+            nn.ReLU(True),
+            nn.Linear(feat_dim, 3 * n_offsets),
+            nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
+        ).cuda()
+
+        # 定义 MLP 用于生成 _speculars
+        self.mlp_specular = nn.Sequential(
+            nn.Linear(feat_dim + 3, feat_dim),
+            nn.ReLU(True),
+            nn.Linear(feat_dim, 3 * n_offsets),
+            nn.Sigmoid()  # 使用 sigmoid 确保高光系数在 [0, 1] 范围内
+        ).cuda()
+
+        # 定义 MLP 用于生成 _roughnesses
+        self.mlp_roughness = nn.Sequential(
+            nn.Linear(feat_dim + 3, feat_dim),
+            nn.ReLU(True),
+            nn.Linear(feat_dim, n_offsets),
+            nn.Sigmoid()  # 使用 sigmoid 确保粗糙度在 [0, 1] 范围内
+        ).cuda()
 
         # 添加法线预测MLP
         # self.mlp_normal = nn.Sequential(
@@ -351,6 +386,7 @@ class GaussianModel:
         normals2 = np.zeros_like(normals)
         speculars = np.zeros((fused_point_cloud.shape[0], self.n_offsets, 3), dtype=np.float32)
         roughnesses = np.full((fused_point_cloud.shape[0], self.n_offsets, 1), self.default_roughness, dtype=np.float32)
+        
         
         self._normals = nn.Parameter(torch.from_numpy(normals).to(self._xyz.device).requires_grad_(True))
         self._normals2 = nn.Parameter(torch.from_numpy(normals2).to(self._xyz.device).requires_grad_(True))
@@ -669,6 +705,8 @@ class GaussianModel:
     def anchor_growing(self, grads, threshold, offset_mask):
         ## 
         init_length = self.get_anchor.shape[0]*self.n_offsets
+
+        # 层级循环：通过 update_depth 控制多尺度生长，每层放宽梯度阈值 cur_threshold（指数衰减）。
         for i in range(self.update_depth):
             # update threshold
             cur_threshold = threshold*((self.update_hierachy_factor//2)**i)
@@ -677,10 +715,11 @@ class GaussianModel:
             candidate_mask = torch.logical_and(candidate_mask, offset_mask)
             
             # random pick
-            rand_mask = torch.rand_like(candidate_mask.float())>(0.5**(i+1))
+            rand_mask = torch.rand_like(candidate_mask.float())>(0.5**(i+1)) # 随机丢弃一些候选点，避免生长的过于密集
             rand_mask = rand_mask.cuda()
-            candidate_mask = torch.logical_and(candidate_mask, rand_mask)
+            candidate_mask = torch.logical_and(candidate_mask, rand_mask) 
             
+            # 前一轮循环可能新增了锚点
             length_inc = self.get_anchor.shape[0]*self.n_offsets - init_length
             if length_inc == 0:
                 if i > 0:
@@ -688,19 +727,22 @@ class GaussianModel:
             else:
                 candidate_mask = torch.cat([candidate_mask, torch.zeros(length_inc, dtype=torch.bool, device='cuda')], dim=0)
 
+            # 全局坐标：all_xyz = 锚点位置 + 偏移量 × 缩放因子。
             all_xyz = self.get_anchor.unsqueeze(dim=1) + self._offset * self.get_scaling[:,:3].unsqueeze(dim=1)
             
             # assert self.update_init_factor // (self.update_hierachy_factor**i) > 0
             # size_factor = min(self.update_init_factor // (self.update_hierachy_factor**i), 1)
+
+            # 体素尺寸：随层级指数增大（cur_size），实现从细到粗的生长。
             size_factor = self.update_init_factor // (self.update_hierachy_factor**i)
             cur_size = self.voxel_size*size_factor
             
-            grid_coords = torch.round(self.get_anchor / cur_size).int()
+            grid_coords = torch.round(self.get_anchor / cur_size).int() # 体素索引
 
             selected_xyz = all_xyz.view([-1, 3])[candidate_mask]
-            selected_grid_coords = torch.round(selected_xyz / cur_size).int()
+            selected_grid_coords = torch.round(selected_xyz / cur_size).int() 
 
-            selected_grid_coords_unique, inverse_indices = torch.unique(selected_grid_coords, return_inverse=True, dim=0)
+            selected_grid_coords_unique, inverse_indices = torch.unique(selected_grid_coords, return_inverse=True, dim=0) # 去重
 
 
             ## split data for reducing peak memory calling
@@ -718,16 +760,17 @@ class GaussianModel:
                 remove_duplicates = (selected_grid_coords_unique.unsqueeze(1) == grid_coords).all(-1).any(-1).view(-1)
 
             remove_duplicates = ~remove_duplicates
-            candidate_anchor = selected_grid_coords_unique[remove_duplicates]*cur_size
+            candidate_anchor = selected_grid_coords_unique[remove_duplicates]*cur_size # 最终候选点
 
             
             if candidate_anchor.shape[0] > 0:
+                # 初始化新锚点属性
                 new_scaling = torch.ones_like(candidate_anchor).repeat([1,2]).float().cuda()*cur_size # *0.05
                 new_scaling = torch.log(new_scaling)
                 new_rotation = torch.zeros([candidate_anchor.shape[0], 4], device=candidate_anchor.device).float()
                 new_rotation[:,0] = 1.0
 
-                new_opacities = inverse_sigmoid(0.1 * torch.ones((candidate_anchor.shape[0], 1), dtype=torch.float, device="cuda"))
+                new_opacities = inverse_sigmoid(0.1 * torch.ones((candidate_anchor.shape[0], 1), dtype=torch.float, device="cuda")) # 0.1
 
                 new_feat = self._anchor_feat.unsqueeze(dim=1).repeat([1, self.n_offsets, 1]).view([-1, self.feat_dim])[candidate_mask]
 
@@ -755,6 +798,7 @@ class GaussianModel:
 
                 torch.cuda.empty_cache()
                 
+                # 新锚点加入到优化器
                 optimizable_tensors = self.cat_tensors_to_optimizer(d)
                 self._anchor = optimizable_tensors["anchor"]
                 self._scaling = optimizable_tensors["scaling"]
@@ -767,25 +811,28 @@ class GaussianModel:
 
     def adjust_anchor(self, check_interval=100, success_threshold=0.8, grad_threshold=0.0002, min_opacity=0.005):
         # # adding anchors
+        # self.offset_gradient_accum 存储了每个偏移点（高斯核中心）的梯度累积值。
+        # self.offset_denom 存储了每个偏移点（高斯核中心）的梯度累积次数。
         grads = self.offset_gradient_accum / self.offset_denom # [N*k, 1]
         grads[grads.isnan()] = 0.0
+        # grads_norm 是 grads 的范数，用于衡量梯度大小。
         grads_norm = torch.norm(grads, dim=-1)
-        offset_mask = (self.offset_denom > check_interval*success_threshold*0.5).squeeze(dim=1)
-        
+        # offset_mask 是偏移点的掩码，用于筛选出梯度足够大的偏移点。
+        offset_mask = (self.offset_denom > check_interval*success_threshold*0.5).squeeze(dim=1) # [N*k]
         self.anchor_growing(grads_norm, grad_threshold, offset_mask)
         
         # update offset_denom
-        self.offset_denom[offset_mask] = 0
+        self.offset_denom[offset_mask] = 0 # [N*k，1] 将活跃的点的梯度累积次数归零。
         padding_offset_demon = torch.zeros([self.get_anchor.shape[0]*self.n_offsets - self.offset_denom.shape[0], 1],
                                            dtype=torch.int32, 
                                            device=self.offset_denom.device)
-        self.offset_denom = torch.cat([self.offset_denom, padding_offset_demon], dim=0)
+        self.offset_denom = torch.cat([self.offset_denom, padding_offset_demon], dim=0) # 新增的点的梯度累积次数初始化为0。
 
-        self.offset_gradient_accum[offset_mask] = 0
+        self.offset_gradient_accum[offset_mask] = 0 # [N*k，1] 将活跃的点的梯度累积值归零。
         padding_offset_gradient_accum = torch.zeros([self.get_anchor.shape[0]*self.n_offsets - self.offset_gradient_accum.shape[0], 1],
                                            dtype=torch.int32, 
-                                           device=self.offset_gradient_accum.device)
-        self.offset_gradient_accum = torch.cat([self.offset_gradient_accum, padding_offset_gradient_accum], dim=0)
+                                           device=self.offset_gradient_accum.device) 
+        self.offset_gradient_accum = torch.cat([self.offset_gradient_accum, padding_offset_gradient_accum], dim=0) # 新增的点的梯度累积值初始化为0。
         
         # # prune anchors
         prune_mask = (self.opacity_accum < min_opacity*self.anchor_demon).squeeze(dim=1)
@@ -819,6 +866,7 @@ class GaussianModel:
         if prune_mask.shape[0]>0:
             self.prune_anchor(prune_mask)
         
+        # 重置所有锚点在2D投影平面上的最大半径
         self.max_radii2D = torch.zeros((self.get_anchor.shape[0]), device="cuda")
 
     def save_mlp_checkpoints(self, path, mode = 'split'):#split or unite
@@ -898,6 +946,7 @@ class GaussianModel:
         else:
             raise NotImplementedError
 
+    # 获取法向，最短轴法
     def get_normal(self, dir_pp_normalized=None, return_delta=False):
         normal_axis = self.get_minimum_axis
         normal_axis = normal_axis
@@ -918,5 +967,10 @@ class GaussianModel:
     # def get_material_mlp(self):
     #     return self.mlp_material
 
-    def get_light_direction(self):
-        return torch.nn.functional.normalize(self.light_direction, dim=-1)
+    @property 
+    def get_minimum_axis(self):
+        return get_minimum_axis(self.get_scaling, self.get_rotation)
+
+
+    # def get_light_direction(self):
+    #     return torch.nn.functional.normalize(self.light_direction, dim=-1)
