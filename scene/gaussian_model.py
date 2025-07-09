@@ -46,9 +46,10 @@ class GaussianModel:
 
 
     def __init__(self, 
-                 sh_degree : int,
                  # brdf setting
-                 brdf_dim : int, brdf_mode : str, brdf_envmap_res: int,
+                 brdf_dim : int, 
+                 brdf_mode : str, 
+                 brdf_envmap_res: int,
                  feat_dim: int=32, 
                  n_offsets: int=5, 
                  voxel_size: float=0.01,
@@ -147,6 +148,7 @@ class GaussianModel:
         # self._roughnesses = torch.empty(0) # [N, n_offsets, 1]
 
         # 创建可训练的BRDF环境  
+        # print("brdf_envmap_res=================",self.brdf_envmap_res)
         self.brdf_mlp = create_trainable_env_rnd(self.brdf_envmap_res, scale=0.0, bias=0.8)
 
         self.diffuse_activation = torch.sigmoid
@@ -161,16 +163,16 @@ class GaussianModel:
         # 定义两个 MLP 分别用于生成 _normals 和 _normals2
         self.mlp_normal1 = nn.Sequential(
             nn.Linear(feat_dim + 3, feat_dim),
-            nn.ReLU(True),
+            #  nn.ReLU(True),
             nn.Linear(feat_dim, 3 * n_offsets),
-            nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
+            #  nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
         ).cuda()
 
         self.mlp_normal2 = nn.Sequential(
             nn.Linear(feat_dim + 3, feat_dim),
-            nn.ReLU(True),
+            #  nn.ReLU(True),
             nn.Linear(feat_dim, 3 * n_offsets),
-            nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
+            #  nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
         ).cuda()
 
         # 定义 MLP 用于生成 _speculars
@@ -985,7 +987,7 @@ class GaussianModel:
 
             # 额外的 mlp
             self.mlp_roughness.eval()
-            roughness_mlp = torch.jit.trace(self.mlp_roughness, (torch.rand(1, self.feat_dim+1).cuda()))
+            roughness_mlp = torch.jit.trace(self.mlp_roughness, (torch.rand(1, self.feat_dim+3).cuda()))
             roughness_mlp.save(os.path.join(path, 'roughness_mlp.pt'))
             self.mlp_roughness.train()
 

@@ -23,13 +23,15 @@ os.system('echo $CUDA_VISIBLE_DEVICES')
 from scene import Scene
 import json
 import time
-from gaussian_renderer import render, prefilter_voxel
+from gaussian_renderer import render, prefilter_voxel,render_lighting
 import torchvision
 from tqdm import tqdm
 from utils.general_utils import safe_state
 from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
 from gaussian_renderer import GaussianModel
+from os import makedirs
+from scene.NVDIFFREC.util import save_image_raw
 
 def render_set(model_path, name, iteration, views, gaussians, pipeline, background):
     render_path = os.path.join(model_path, name, "ours_{}".format(iteration), "renders")
@@ -64,10 +66,26 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
     with open(os.path.join(model_path, name, "ours_{}".format(iteration), "per_view_count.json"), 'w') as fp:
             json.dump(per_view_dict, fp, indent=True)      
-     
+
+def render_lightings(model_path, name, iteration, gaussians, sample_num):
+    lighting_path = os.path.join(model_path, name, "ours_{}".format(iteration))
+    makedirs(lighting_path, exist_ok=True)    
+    # sampled_indicies = torch.randperm(gaussians.get_xyz.shape[0])[:sample_num]
+    sampled_indicies = torch.arange(gaussians.get_xyz.shape[0], dtype=torch.long)[:sample_num]
+    for sampled_index in tqdm(sampled_indicies, desc="Rendering lighting progress"):
+        lighting = render_lighting(gaussians, sampled_index=sampled_index)
+        torchvision.utils.save_image(lighting, os.path.join(lighting_path, '{0:05d}'.format(sampled_index) + ".png"))
+        save_image_raw(os.path.join(lighting_path, '{0:05d}'.format(sampled_index) + ".hdr"), lighting.permute(1,2,0).detach().cpu().numpy())
+
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool):
+    
+    print("render envmap:", dataset.brdf_envmap_res)
+    print("skip train:", skip_train)
+    print("skip test:", skip_test)
+    print("brdf:" , pipeline.brdf)
+
     with torch.no_grad():
-        gaussians = GaussianModel(dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
+        gaussians = GaussianModel(dataset.brdf_dim,dataset.brdf_mode,dataset.brdf_envmap_res,dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
                               dataset.appearance_dim, dataset.ratio, dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         
@@ -83,6 +101,9 @@ def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParam
 
         if not skip_test:
              render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background)
+
+        if pipeline.brdf:
+            render_lightings(dataset.model_path, "lighting", scene.loaded_iter, gaussians, sample_num=1)
 
 if __name__ == "__main__":
     # Set up command line argument parser

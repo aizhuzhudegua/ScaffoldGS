@@ -79,6 +79,10 @@ class EnvironmentLight(torch.nn.Module):
             self.specular[idx] = ru.specular_cubemap(self.specular[idx], roughness, cutoff) 
         self.specular[-1] = ru.specular_cubemap(self.specular[-1], 1.0, cutoff)
 
+        # print("查看可用的函数列表")
+        # print(self.specular) 
+        # print(self.specular[-1])  # 查看可用的函数列表
+
     def regularizer(self):
         white = (self.base[..., 0:1] + self.base[..., 1:2] + self.base[..., 2:3]) / 3.0
         return torch.mean(torch.abs(self.base - white))
@@ -129,6 +133,12 @@ class EnvironmentLight(torch.nn.Module):
         # (H, W, N, C)
         wo = util.safe_normalize(view_pos - gb_pos)
 
+        # print("gb_pos shape:", gb_pos.shape)      # 应为 [B, H, W, 3] 或 [H, W, 3]
+        # print("gb_normal shape:", gb_normal.shape)
+        # print("kd shape:", kd.shape)
+        # print("ks shape:", ks.shape)
+        # print("view_pos shape:", view_pos.shape)
+
         if specular:
             diffuse_raw = kd
             roughness = kr
@@ -158,6 +168,7 @@ class EnvironmentLight(torch.nn.Module):
 
             # Roughness adjusted specular env lookup
             miplevel = self.get_mip(roughness)
+
             spec = dr.texture(self.specular[0][None, ...], reflvec.contiguous(), mip=list(m[None, ...] for m in self.specular[1:]), mip_level_bias=miplevel[..., 0], filter_mode='linear-mipmap-linear', boundary_mode='cube')
 
             # Compute aggregate lighting

@@ -49,6 +49,7 @@ lpips_fn = lpips.LPIPS(net='vgg').to('cuda')
 
 try:
     from torch.utils.tensorboard import SummaryWriter
+    
     TENSORBOARD_FOUND = True
     print("found tf board")
 except ImportError:
@@ -77,12 +78,34 @@ def saveRuntimeCode(dst: str) -> None:
     shutil.copytree(log_dir, dst, ignore=shutil.ignore_patterns(*ignorePatterns))
     
     print('Backup Finished!')
-
-
+    
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter(log_dir='./logs')  # 日志保存目录
 def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, wandb=None, logger=None, ply_path=None):
+    
+
+    # 打印所有参数值
+    print("====== Training Parameters ======")
+    print(vars(dataset))  # 输出dataset对象的所有字段和值[1]
+    print(vars(opt))      # 输出opt对象的所有字段和值[1]
+    print(vars(pipe))     # 输出pipe对象的所有字段和值[1]
+
+    print(f"dataset_name: {dataset_name}")
+    print(f"testing_iterations: {testing_iterations}") 
+    print(f"saving_iterations: {saving_iterations}")
+    print(f"checkpoint_iterations: {checkpoint_iterations}")
+    print(f"checkpoint: {checkpoint}")
+    print(f"debug_from: {debug_from}")
+    print(f"wandb: {wandb}") 
+    print(f"logger: {logger}")
+    print(f"ply_path: {ply_path}")
+    print("================================")
+   
+    writer = SummaryWriter(log_dir='./logs')  # 日志保存目录
+    
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
+    gaussians = GaussianModel(dataset.brdf_dim,dataset.brdf_mode,dataset.brdf_envmap_res,dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
                               dataset.appearance_dim, dataset.ratio, dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist)
     scene = Scene(dataset, gaussians, ply_path=ply_path, shuffle=False)
     gaussians.training_setup(opt)
@@ -97,6 +120,13 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+
+    # Debug
+    # opt.iterations = 10
+    # saving_iterations = [10]
+
+    print("normal_reg_from_iter:" ,opt.normal_reg_from_iter)
+
     for iteration in range(first_iter, opt.iterations + 1):        
         # network gui not available in scaffold-gs yet
         if network_gui.conn == None:
@@ -146,15 +176,39 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
         # 额外loss
         losses_extra = {}
         if pipe.brdf and iteration > opt.normal_reg_from_iter:
+            
             if iteration<opt.normal_reg_util_iter:
                 losses_extra['predicted_normal'] = predicted_normal_loss(render_pkg["normal"], render_pkg["normal_ref"], render_pkg["alpha"])
+                writer.add_scalar('Loss/Predicted_Normal', losses_extra['predicted_normal'].item(), iteration)
             losses_extra['zero_one'] = zero_one_loss(render_pkg["alpha"])
+            writer.add_scalar('Loss/Zero_One', losses_extra['zero_one'].item(), iteration)
             if "delta_normal_norm" not in render_pkg.keys() and opt.lambda_delta_reg>0: assert()
             if "delta_normal_norm" in render_pkg.keys():
                 losses_extra['delta_reg'] = delta_normal_loss(render_pkg["delta_normal_norm"], render_pkg["alpha"])
+                writer.add_scalar('Loss/Delta_Reg', losses_extra['delta_reg'].item(), iteration)
+
         
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
+
+        # 每1000轮保存图像
+        if iteration % 1000 == 0:
+            # 确保输出目录存在
+            os.makedirs('./output/debug', exist_ok=True)
+
+            # 将张量转换为PIL图像
+            def tensor_to_pil(tensor):
+                return Image.fromarray(
+                    (torch.clamp(tensor.detach(), 0, 1).permute(1, 2, 0).cpu().numpy() * 255).astype('uint8')
+                )
+                
+            # 保存渲染图像和GT图像
+            tensor_to_pil(image).save(f'./output/debug/render_iter_{iteration}.png')
+            tensor_to_pil(gt_image).save(f'./output/debug/gt_iter_{iteration}.png')
+            tensor_to_pil(render_pkg["normal"]).save(f'./output/debug/normal_{iteration}.png')
+            tensor_to_pil(render_pkg["normal_ref"]).save(f'./output/debug/normal_ref_{iteration}.png')
+            tensor_to_pil(render_pkg["alpha"]).save(f'./output/debug/alpha_{iteration}.png')
+
 
         ssim_loss = (1.0 - ssim(image, gt_image))
         scaling_reg = scaling.prod(dim=1).mean()
@@ -164,6 +218,12 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
             loss += getattr(opt, f'lambda_{k}')* losses_extra[k]
         loss.backward()
         
+        # 记录Loss到TensorBoard
+        writer.add_scalar('Loss/L1', Ll1.item(), iteration)
+        writer.add_scalar('Loss/SSIM', ssim_loss.item(), iteration)
+        writer.add_scalar('Loss/Scaling_Reg', scaling_reg.item(), iteration)
+        
+
         iter_end.record()
 
         with torch.no_grad():
@@ -176,6 +236,7 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
             if iteration == opt.iterations:
                 progress_bar.close()
 
+            print("=============psnr==============",psnr(image, gt_image).mean())
             # Log and save
             training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger)
             if (iteration in saving_iterations):
@@ -341,7 +402,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
 
 def render_sets(dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train=True, skip_test=False, wandb=None, tb_writer=None, dataset_name=None, logger=None):
     with torch.no_grad():
-        gaussians = GaussianModel(dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
+        gaussians = GaussianModel(dataset.brdf_dim,dataset.brdf_mode,dataset.brdf_envmap_res,dataset.feat_dim, dataset.n_offsets, dataset.voxel_size, dataset.update_depth, dataset.update_init_factor, dataset.update_hierachy_factor, dataset.use_feat_bank, 
                               dataset.appearance_dim, dataset.ratio, dataset.add_opacity_dist, dataset.add_cov_dist, dataset.add_color_dist)
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
         gaussians.eval()
@@ -552,12 +613,12 @@ if __name__ == "__main__":
     # All done
     logger.info("\nTraining complete.")
 
-    # rendering
-    logger.info(f'\nStarting Rendering~')
-    visible_count = render_sets(lp.extract(args), -1, pp.extract(args), wandb=wandb, logger=logger)
-    logger.info("\nRendering complete.")
+    # # rendering
+    # logger.info(f'\nStarting Rendering~')
+    # visible_count = render_sets(lp.extract(args), -1, pp.extract(args), wandb=wandb, logger=logger)
+    # logger.info("\nRendering complete.")
 
-    # calc metrics
-    logger.info("\n Starting evaluation...")
-    evaluate(args.model_path, visible_count=visible_count, wandb=wandb, logger=logger)
-    logger.info("\nEvaluating complete.")
+    # # calc metrics
+    # logger.info("\n Starting evaluation...")
+    # evaluate(args.model_path, visible_count=visible_count, wandb=wandb, logger=logger)
+    # logger.info("\nEvaluating complete.")

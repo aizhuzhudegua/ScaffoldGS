@@ -16,6 +16,8 @@ from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianR
 from scene.gaussian_model import GaussianModel
 from utils.sh_utils import eval_sh
 from utils.graphics_utils import normal_from_depth_image
+from utils.general_utils import flip_align_view
+from scene.NVDIFFREC import extract_env_map
 
 def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask=None, is_training=False):
     ## view frustum filtering for acceleration    
@@ -150,6 +152,16 @@ def render_normal(viewpoint_cam, depth, bg_color, alpha):
 
     return normal_ref
 
+# render 360 lighting for a single gaussian
+def render_lighting(pc : GaussianModel, resolution=(512, 1024), sampled_index=None):
+    if pc.brdf_mode=="envmap":
+        lighting = extract_env_map(pc.brdf_mlp, resolution) # (H, W, 3)
+        lighting = lighting.permute(2,0,1) # (3, H, W)
+    else:
+        raise NotImplementedError
+
+    return lighting
+
 def normalize_normal_inplace(normal, alpha):
     # normal: (3, H, W), alpha: (H, W)
     fg_mask = (alpha[None,...]>0.).repeat(3, 1, 1)
@@ -199,9 +211,10 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     # 执行这里的shading
     gb_pos = xyz # (N*k, 3) 
+    view_pos = viewpoint_camera.camera_center.repeat(gb_pos.shape[0], 1) # (N, 3)
 
     # 计算每个高斯的视角方向
-    dir_pp = (gb_pos - viewpoint_camera.camera_center.repeat(gb_pos.shape[0], 1))
+    dir_pp = (gb_pos - view_pos)
     dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True) # (N*k, 3)
 
     
@@ -212,9 +225,18 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     roughness = roughness # (N*k, 1)
     features_rest = features_rest # (N*k, 3)
 
-    #color, brdf_pkg = pc.brdf_mlp.shade(gb_pos[None, None, ...], normal[None, None, ...], diffuse[None, None, ...], specular[None, None, ...], roughness[None, None, ...], view_pos[None, None, ...])
-    color = diffuse_color
+    # print("==============shape=====================")
+    # print(gb_pos.shape)
+    # print(normal.shape)
+    # print(diffuse_color.shape)
+    # print(specular.shape)
+    # print(roughness.shape)
+    # print(view_pos.shape)
+    # print("==============shape=====================")
 
+    color, brdf_pkg = pc.brdf_mlp.shade(gb_pos[None, None, ...], normal[None, None, ...], diffuse_color[None, None, ...], specular[None, None, ...], roughness[None, None, ...], view_pos[None, None, ...])
+    # color = diffuse_color
+    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",color.shape)  # 必须为 [1,1,N,3]
     # colors_precomp = color.squeeze() # (N, 3)
     # diffuse_color = brdf_pkg['diffuse'].squeeze() # (N, 3) 
     # specular_color = brdf_pkg['specular'].squeeze() # (N, 3) 
@@ -261,12 +283,14 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
     
+    # 修改后（压缩维度 + 恢复梯度）
+    colors_precomp = color.squeeze()  # [1,1,N,3] -> [N,3]
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     rendered_image, radii = rasterizer(
         means3D = xyz,
         means2D = screenspace_points,
         shs = None,
-        colors_precomp = color,
+        colors_precomp = colors_precomp,
         opacities = opacity,
         scales = scaling,
         rotations = rot,
@@ -341,27 +365,26 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     normalize_normal_inplace(out_extras["normal"], out_extras["alpha"][0])
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
 
-    train_out = {"render": rendered_image,
+    if is_training:
+        out = {"render": rendered_image,
+                    "viewspace_points": screenspace_points,
+                    "visibility_filter" : radii > 0,
+                    "radii": radii,
+                    "selection_mask": mask,
+                    "neural_opacity": neural_opacity,
+                    "scaling": scaling,
+                    }
+  
+    else:
+        out = {"render": rendered_image,
                 "viewspace_points": screenspace_points,
                 "visibility_filter" : radii > 0,
                 "radii": radii,
-                "selection_mask": mask,
-                "neural_opacity": neural_opacity,
-                "scaling": scaling,
                 }
-    train_out.update(out_extras)
-
-    out = {"render": rendered_image,
-            "viewspace_points": screenspace_points,
-            "visibility_filter" : radii > 0,
-            "radii": radii,
-            }
     out.update(out_extras)
 
-    if is_training:
-        return train_out
-    else:
-        return out
+    
+    return out
 
 
 def prefilter_voxel(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None):
