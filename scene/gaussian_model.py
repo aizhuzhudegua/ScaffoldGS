@@ -1092,7 +1092,7 @@ class GaussianModel:
         idx = torch.where(positive, 0, 1).long()[:,None,:].repeat(1, 3, 1) # (N, 3, 1)
         delta_normal = torch.gather(delta_normal, index=idx, dim=-1).squeeze(-1) # (N, 3)
         normal = normal_axis  #delta_normal + 
-        normal = normal/normal.norm(dim=1, keepdim=True) # (N, 3)
+        # normal = normal/normal.norm(dim=1, keepdim=True) # (N, 3)
         if return_delta:
             return normal, delta_normal
         else:
