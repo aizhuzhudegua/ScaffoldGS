@@ -77,6 +77,7 @@ def focal2fov(focal, pixels):
     return 2*math.atan(pixels/(2*focal))
 
 
+# Modified codes from Gaussian Shader: https://github.com/Asparagus15/GaussianShader
 def ndc_2_cam(ndc_xyz, intrinsic, W, H):
     inv_scale = torch.tensor([[W - 1, H - 1]], device=ndc_xyz.device)
     cam_z = ndc_xyz[..., 2:3]
@@ -98,15 +99,6 @@ def depth2point_cam(sampled_depth, ref_intrinsic):
     cam_xyz = ndc_2_cam(ndc_xyz, ref_intrinsic, W, H) # 1, 1, 5, 512, 640, 3
     return ndc_xyz, cam_xyz
 
-def depth2point_world(depth_image, intrinsic_matrix, extrinsic_matrix):
-    # depth_image: (H, W), intrinsic_matrix: (3, 3), extrinsic_matrix: (4, 4)
-    _, xyz_cam = depth2point_cam(depth_image[None,None,None,...], intrinsic_matrix[None,...])
-    xyz_cam = xyz_cam.reshape(-1,3)
-    xyz_world = torch.cat([xyz_cam, torch.ones_like(xyz_cam[...,0:1])], axis=-1) @ torch.inverse(extrinsic_matrix).transpose(0,1)
-    xyz_world = xyz_world[...,:3]
-
-    return xyz_world
-
 def depth_pcd2normal(xyz):
     hd, wd, _ = xyz.shape 
     bottom_point = xyz[..., 2:hd,   1:wd-1, :]
@@ -123,11 +115,22 @@ def depth_pcd2normal(xyz):
 def normal_from_depth_image(depth, intrinsic_matrix, extrinsic_matrix):
     # depth: (H, W), intrinsic_matrix: (3, 3), extrinsic_matrix: (4, 4)
     # xyz_normal: (H, W, 3)
-    xyz_world = depth2point_world(depth, intrinsic_matrix, extrinsic_matrix) # (HxW, 3)
-    xyz_world = xyz_world.reshape(*depth.shape, 3)
-    xyz_normal = depth_pcd2normal(xyz_world)
+    _, xyz_cam = depth2point_cam(depth[None,None,None,...], intrinsic_matrix[None,...])
+    xyz_cam = xyz_cam.reshape(-1,3).reshape(*depth.shape, 3)
+    xyz_normal = depth_pcd2normal(xyz_cam)
 
     return xyz_normal
+
+def render_normal_from_depth(viewpoint_cam, depth):
+    # depth: (H, W), bg_color: (3), alpha: (H, W)
+    # normal_ref: (3, H, W)
+    intrinsic_matrix, extrinsic_matrix = viewpoint_cam.get_calib_matrix_nerf()
+    normal_ref = normal_from_depth_image(depth, 
+                                        intrinsic_matrix.to(depth.device), 
+                                        extrinsic_matrix.to(depth.device))
+
+    normal_ref = normal_ref.permute(2,0,1)
+    return normal_ref
 
 def get_dtu_raydir(pixelcoords, intrinsic, rot, dir_norm):
     # rot is c2w
