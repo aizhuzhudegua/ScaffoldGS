@@ -151,13 +151,13 @@ class GaussianModel:
         # print("brdf_envmap_res=================",self.brdf_envmap_res)
         self.brdf_mlp = create_trainable_env_rnd(self.brdf_envmap_res, scale=0.0, bias=0.8)
 
-        self.diffuse_activation = torch.sigmoid
-        self.specular_activation = torch.sigmoid
-        self.default_roughness = 0.0
+        # self.diffuse_activation = torch.sigmoid
+        # self.specular_activation = torch.sigmoid
+        # self.default_roughness = 0.0
 
-        self.roughness_activation = torch.sigmoid
-        self.roughness_bias = 0.
-        self.default_roughness = 0.6
+        # self.roughness_activation = torch.sigmoid
+        # self.roughness_bias = 0.
+        # self.default_roughness = 0.6
 
 
         # 定义两个 MLP 分别用于生成 _normals 和 _normals2
@@ -180,7 +180,7 @@ class GaussianModel:
             nn.Linear(feat_dim + 3, feat_dim),
             nn.ReLU(True),
             nn.Linear(feat_dim, 3 * n_offsets),
-            nn.Sigmoid()  # 使用 sigmoid 确保高光系数在 [0, 1] 范围内
+            nn.Softplus()  # 使用 sigmoid 确保高光系数在 [0, 1] 范围内
         ).cuda()
 
         # 定义 MLP 用于生成 _roughnesses
@@ -188,7 +188,7 @@ class GaussianModel:
             nn.Linear(feat_dim + 3, feat_dim),
             nn.ReLU(True),
             nn.Linear(feat_dim, n_offsets),
-            nn.Sigmoid()  # 使用 sigmoid 确保粗糙度在 [0, 1] 范围内
+            nn.Softplus()  # 使用softplus确保高光指数在[0,∞]范围内
         ).cuda()
 
         # 定义 MLP 用于生成残差色项
