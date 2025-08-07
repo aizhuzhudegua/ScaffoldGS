@@ -131,7 +131,6 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     xyz = repeat_anchor + offsets
 
 
-    # 处理法线
 
     # 返回用于光照计算的组件
     if is_training:
@@ -181,32 +180,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask, normal1, normal2, specular, roughness = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
     else:
         xyz, diffuse_color, opacity, scaling, rot, normal1, normal2, specular, roughness = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
-
-    # # 计算光照
-    # # 使用可学习的光源方向
-    # light_dir = pc.get_light_direction()
-    # light_dir = light_dir.unsqueeze(0).expand(xyz.shape[0], -1)  # 扩展到所有点
-
-    # # 计算漫反射
-    # diffuse = torch.clamp(torch.sum(normal * light_dir, dim=-1, keepdim=True), 0.0, 1.0)
-    # diffuse = diffuse * material[:, 0:1]  # 应用漫反射系数
- 
-    # # 计算高光 (Blinn-Phong)
-    # view_dir = -ob_view.unsqueeze(1).repeat(1, pc.n_offsets, 1)  # [N, n_offsets, 3]
-    # view_dir = view_dir.view(-1, 3)[mask] if is_training else view_dir.view(-1, 3)  # 只保留mask为True的view_dir
-    # view_dir = torch.nn.functional.normalize(view_dir, dim=-1)  # 确保是单位向量
-    
-    # half_dir = torch.nn.functional.normalize(light_dir + view_dir, dim=-1)
-    # specular = torch.pow(torch.clamp(torch.sum(normal * half_dir, dim=-1, keepdim=True), 0.0, 1.0), 
-    #                     material[:, 2:3] * 100.0)  # 高光指数
-    # specular = specular * material[:, 1:2]  # 应用高光系数
-
-    # # 计算最终颜色
-    # color = diffuse_color * (diffuse + 0.1) + specular  # 0.1是环境光
-
-    # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-
-    
 
 
     # 执行这里的shading
@@ -367,7 +340,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     
     # Render normal from depth image, and alpha blend with the background. 
     # 渲染法线图
-    out_extras["normal_ref"] = render_normal(viewpoint_cam=viewpoint_camera, depth=out_extras['depth'][0], bg_color=bg_color, alpha=out_extras["alpha"].detach()[0])
+    out_extras["normal_ref"] = render_normal(viewpoint_cam=viewpoint_camera, depth=out_extras['depth'][0], bg_color=bg_color, alpha=out_extras["alpha"][0])
     
     # normalize_normal_inplace(out_extras["normal"], out_extras["alpha"][0])
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
