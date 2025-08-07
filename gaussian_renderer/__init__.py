@@ -367,9 +367,9 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     
     # Render normal from depth image, and alpha blend with the background. 
     # 渲染法线图
-    out_extras["normal_ref"] = render_normal(viewpoint_cam=viewpoint_camera, depth=out_extras['depth'][0], bg_color=bg_color, alpha=out_extras["alpha"][0])
+    out_extras["normal_ref"] = render_normal(viewpoint_cam=viewpoint_camera, depth=out_extras['depth'][0], bg_color=bg_color, alpha=out_extras["alpha"].detach()[0])
     
-    normalize_normal_inplace(out_extras["normal"], out_extras["alpha"][0])
+    # normalize_normal_inplace(out_extras["normal"], out_extras["alpha"][0])
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
 
     if is_training:
