@@ -192,12 +192,12 @@ class GaussianModel:
         ).cuda()
 
         # 定义 MLP 用于生成残差色项
-        self.mlp_features_rest = nn.Sequential(
-            nn.Linear(feat_dim + 3, feat_dim),
-            nn.ReLU(True),
-            nn.Linear(feat_dim, 3 * n_offsets),
-            nn.Sigmoid() 
-        ).cuda()
+        # self.mlp_features_rest = nn.Sequential(
+        #     nn.Linear(feat_dim + 3, feat_dim),
+        #     nn.ReLU(True),
+        #     nn.Linear(feat_dim, 3 * n_offsets),
+        #     nn.Sigmoid() 
+        # ).cuda()
 
         # 添加法线预测MLP
         # self.mlp_normal = nn.Sequential(
@@ -228,7 +228,7 @@ class GaussianModel:
         self.mlp_roughness.eval()
         self.mlp_normal1.eval()
         self.mlp_normal2.eval()
-        self.mlp_features_rest.eval()
+        # self.mlp_features_rest.eval()
 
         if self.appearance_dim > 0:
             self.embedding_appearance.eval()
@@ -348,9 +348,9 @@ class GaussianModel:
     def get_normal2_mlp(self):
         return self.mlp_normal2
     
-    @property
-    def get_features_rest_mlp(self):
-        return self.mlp_features_rest
+    # @property
+    # def get_features_rest_mlp(self):
+    #     return self.mlp_features_rest
     
 
     
@@ -492,7 +492,7 @@ class GaussianModel:
                 {'params': self.mlp_roughness.parameters(), 'lr': training_args.mlp_roughness_lr_init, "name": "mlp_roughness"},
                 {'params': self.mlp_normal1.parameters(), 'lr': training_args.mlp_normal1_lr_init, "name": "mlp_normal1"},
                 {'params': self.mlp_normal2.parameters(), 'lr': training_args.mlp_normal2_lr_init, "name": "mlp_normal2"},
-                {'params': self.mlp_features_rest.parameters(), 'lr': training_args.mlp_features_rest_lr_init, "name": "mlp_features_rest"},
+                # {'params': self.mlp_features_rest.parameters(), 'lr': training_args.mlp_features_rest_lr_init, "name": "mlp_features_rest"},
             ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
@@ -541,10 +541,10 @@ class GaussianModel:
                                                     lr_delay_mult=training_args.mlp_normal2_lr_delay_mult,
                                                     max_steps=training_args.mlp_normal2_lr_max_steps)
         
-        self.mlp_features_rest_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_features_rest_lr_init,
-                                                    lr_final=training_args.mlp_features_rest_lr_final,
-                                                    lr_delay_mult=training_args.mlp_features_rest_lr_delay_mult,
-                                                    max_steps=training_args.mlp_features_rest_lr_max_steps)
+        # self.mlp_features_rest_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_features_rest_lr_init,
+        #                                             lr_final=training_args.mlp_features_rest_lr_final,
+        #                                             lr_delay_mult=training_args.mlp_features_rest_lr_delay_mult,
+        #                                             max_steps=training_args.mlp_features_rest_lr_max_steps)
         # 额外添加的mlp
 
 
@@ -591,9 +591,9 @@ class GaussianModel:
             if param_group["name"] == "mlp_normal2":
                 lr = self.mlp_normal2_scheduler_args(iteration)
                 param_group['lr'] = lr
-            if param_group["name"] == "mlp_features_rest":
-                lr = self.mlp_features_rest_scheduler_args(iteration)
-                param_group['lr'] = lr
+            # if param_group["name"] == "mlp_features_rest":
+            #     lr = self.mlp_features_rest_scheduler_args(iteration)
+            #     param_group['lr'] = lr
 
             if self.use_feat_bank and param_group["name"] == "mlp_featurebank":
                 lr = self.mlp_featurebank_scheduler_args(iteration)
@@ -1006,10 +1006,10 @@ class GaussianModel:
             normal2_mlp.save(os.path.join(path, 'normal2_mlp.pt'))
             self.mlp_normal2.train()
 
-            self.mlp_features_rest.eval()
-            features_rest_mlp = torch.jit.trace(self.mlp_features_rest, (torch.rand(1, self.feat_dim+3).cuda()))
-            features_rest_mlp.save(os.path.join(path, 'features_rest_mlp.pt'))
-            self.mlp_features_rest.train()
+            # self.mlp_features_rest.eval()
+            # features_rest_mlp = torch.jit.trace(self.mlp_features_rest, (torch.rand(1, self.feat_dim+3).cuda()))
+            # features_rest_mlp.save(os.path.join(path, 'features_rest_mlp.pt'))
+            # self.mlp_features_rest.train()
 
 
             if self.use_feat_bank:
@@ -1063,7 +1063,7 @@ class GaussianModel:
             self.mlp_specular = torch.jit.load(os.path.join(path,'specular_mlp.pt')).cuda()
             self.mlp_normal1 = torch.jit.load(os.path.join(path, 'normal1_mlp.pt')).cuda()
             self.mlp_normal2 = torch.jit.load(os.path.join(path, 'normal2_mlp.pt')).cuda()
-            self.mlp_features_rest = torch.jit.load(os.path.join(path, 'features_rest_mlp.pt')).cuda()
+            # self.mlp_features_rest = torch.jit.load(os.path.join(path, 'features_rest_mlp.pt')).cuda()
 
             if self.use_feat_bank:
                 self.mlp_feature_bank = torch.jit.load(os.path.join(path, 'feature_bank_mlp.pt')).cuda()
@@ -1091,7 +1091,7 @@ class GaussianModel:
         delta_normal = torch.stack([delta_normal1, delta_normal2], dim=-1) # (N, 3, 2)
         idx = torch.where(positive, 0, 1).long()[:,None,:].repeat(1, 3, 1) # (N, 3, 1)
         delta_normal = torch.gather(delta_normal, index=idx, dim=-1).squeeze(-1) # (N, 3)
-        normal = delta_normal + normal_axis 
+        normal = normal_axis  #delta_normal + 
         normal = normal/normal.norm(dim=1, keepdim=True) # (N, 3)
         if return_delta:
             return normal, delta_normal

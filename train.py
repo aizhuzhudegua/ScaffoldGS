@@ -165,8 +165,11 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
         
         voxel_visible_mask = prefilter_voxel(viewpoint_cam, gaussians, pipe,background)
         retain_grad = (iteration < opt.update_until and iteration >= 0)
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, visible_mask=voxel_visible_mask, retain_grad=retain_grad)
+        # if(iteration > 20000):
+        render_pkg = render(viewpoint_cam, gaussians, pipe, background, visible_mask=voxel_visible_mask, retain_grad=retain_grad, pbr = True)
         
+        # else:
+        #render_pkg = render(viewpoint_cam, gaussians, pipe, background, visible_mask=voxel_visible_mask, retain_grad=retain_grad)
         # print("Debug-----------------------" )
         # print(render_pkg)
         
@@ -175,44 +178,55 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
 
         # 额外loss
         losses_extra = {}
-        if pipe.brdf and iteration > opt.normal_reg_from_iter:
+        # if pipe.brdf and iteration > opt.normal_reg_from_iter:
             
-            if iteration<opt.normal_reg_util_iter:
-                losses_extra['predicted_normal'] = predicted_normal_loss(render_pkg["normal"], render_pkg["normal_ref"], render_pkg["alpha"])
-                writer.add_scalar('Loss/Predicted_Normal', losses_extra['predicted_normal'].item(), iteration)
-            losses_extra['zero_one'] = zero_one_loss(render_pkg["alpha"])
-            writer.add_scalar('Loss/Zero_One', losses_extra['zero_one'].item(), iteration)
-            if "delta_normal_norm" not in render_pkg.keys() and opt.lambda_delta_reg>0: assert()
-            if "delta_normal_norm" in render_pkg.keys():
-                losses_extra['delta_reg'] = delta_normal_loss(render_pkg["delta_normal_norm"], render_pkg["alpha"])
-                writer.add_scalar('Loss/Delta_Reg', losses_extra['delta_reg'].item(), iteration)
+        #     if iteration<opt.normal_reg_util_iter:
+        #         losses_extra['predicted_normal'] = predicted_normal_loss(render_pkg["normal"], render_pkg["normal_ref"], render_pkg["alpha"])
+        #         writer.add_scalar('Loss/Predicted_Normal', losses_extra['predicted_normal'].item(), iteration)
+        #     # losses_extra['zero_one'] = zero_one_loss(render_pkg["alpha"])
+        #     # writer.add_scalar('Loss/Zero_One', losses_extra['zero_one'].item(), iteration)
+        #     if "delta_normal_norm" not in render_pkg.keys() and opt.lambda_delta_reg>0: assert()
+        #     if "delta_normal_norm" in render_pkg.keys():
+        #         losses_extra['delta_reg'] = delta_normal_loss(render_pkg["delta_normal_norm"], render_pkg["alpha"])
+        #         writer.add_scalar('Loss/Delta_Reg', losses_extra['delta_reg'].item(), iteration)
+        render_pkg["normal"] = (render_pkg["normal"] - 0.5) * 2
+        if iteration > 5000:
+            losses_extra['predicted_normal'] = predicted_normal_loss(render_pkg["normal"], render_pkg["normal_ref"], render_pkg["alpha"])
+            writer.add_scalar('Loss/predicted_normal', losses_extra['predicted_normal'], iteration)
 
-        
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
 
-        # 每1000轮保存图像
-        if iteration % 1000 == 0:
-            # 确保输出目录存在
-            os.makedirs('./output/debug', exist_ok=True)
+        
+        if iteration % 100 == 0:
+            
+            writer.add_image('Render/normal', render_pkg["normal"],global_step=iteration)
+            writer.add_image('Render/normal_ref', render_pkg["normal_ref"],global_step=iteration)
+            writer.add_image('Render/image', image, global_step=iteration)
+            writer.add_image('Render/gt_image', gt_image, global_step=iteration)
 
-            # 将张量转换为PIL图像
-            def tensor_to_pil(tensor):
-                return Image.fromarray(
-                    (torch.clamp(tensor.detach(), 0, 1).permute(1, 2, 0).cpu().numpy() * 255).astype('uint8')
-                )
+        # # 每1000轮保存图像
+        # if iteration % 1000 == 0:
+        #     # 确保输出目录存在
+        #     os.makedirs('./output/debug', exist_ok=True)
+
+        #     # 将张量转换为PIL图像
+        #     def tensor_to_pil(tensor):
+        #         return Image.fromarray(
+        #             (torch.clamp(tensor.detach(), 0, 1).permute(1, 2, 0).cpu().numpy() * 255).astype('uint8')
+        #         )
                 
-            # 保存渲染图像和GT图像
-            tensor_to_pil(image).save(f'./output/debug/render_iter_{iteration}.png')
-            tensor_to_pil(gt_image).save(f'./output/debug/gt_iter_{iteration}.png')
-            tensor_to_pil(render_pkg["normal"]).save(f'./output/debug/normal_{iteration}.png')
-            tensor_to_pil(render_pkg["normal_ref"]).save(f'./output/debug/normal_ref_{iteration}.png')
-            tensor_to_pil(render_pkg["alpha"]).save(f'./output/debug/alpha_{iteration}.png')
+        #     # 保存渲染图像和GT图像
+        #     tensor_to_pil(image).save(f'./output/debug/render_iter_{iteration}.png')
+        #     tensor_to_pil(gt_image).save(f'./output/debug/gt_iter_{iteration}.png')
+        #     tensor_to_pil(render_pkg["normal"]).save(f'./output/debug/normal_{iteration}.png')
+        #     tensor_to_pil(render_pkg["normal_ref"]).save(f'./output/debug/normal_ref_{iteration}.png')
+        #     tensor_to_pil(render_pkg["alpha"]).save(f'./output/debug/alpha_{iteration}.png')
 
 
         ssim_loss = (1.0 - ssim(image, gt_image))
         scaling_reg = scaling.prod(dim=1).mean()
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * ssim_loss + 0.01*scaling_reg
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * ssim_loss + 0.001*scaling_reg
 
         for k in losses_extra.keys():
             loss += getattr(opt, f'lambda_{k}')* losses_extra[k]
@@ -236,7 +250,7 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
             if iteration == opt.iterations:
                 progress_bar.close()
 
-            print("=============psnr==============",psnr(image, gt_image).mean())
+            # print("=============psnr==============",psnr(image, gt_image).mean())
             # Log and save
             training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger)
             if (iteration in saving_iterations):
@@ -344,6 +358,11 @@ def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elap
                 if tb_writer:
                     tb_writer.add_scalar(f'{dataset_name}/'+config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
                     tb_writer.add_scalar(f'{dataset_name}/'+config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
+
+                if writer:
+                    writer.add_scalar(f'{dataset_name}/'+config['name'] + '/loss_viewpoint - l1_loss', l1_test, iteration)
+                    writer.add_scalar(f'{dataset_name}/'+config['name'] + '/loss_viewpoint - psnr', psnr_test, iteration)
+
                 if wandb is not None:
                     wandb.log({f"{config['name']}_loss_viewpoint_l1_loss":l1_test, f"{config['name']}_PSNR":psnr_test})
 

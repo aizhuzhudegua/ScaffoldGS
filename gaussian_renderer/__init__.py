@@ -96,8 +96,8 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     roughness = pc.get_roughness_mlp(cat_local_view_wodist)
     roughness = roughness.reshape([anchor.shape[0]*pc.n_offsets, 1])
 
-    features_rest = pc.get_features_rest_mlp(cat_local_view_wodist)
-    features_rest = features_rest.reshape([anchor.shape[0]*pc.n_offsets, 3])
+    # features_rest = pc.get_features_rest_mlp(cat_local_view_wodist)
+    # features_rest = features_rest.reshape([anchor.shape[0]*pc.n_offsets, 3])
 
     normal1 = pc.get_normal1_mlp(cat_local_view_wodist)
     normal1 = normal1.reshape([anchor.shape[0]*pc.n_offsets, 3])
@@ -118,9 +118,9 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     # combine for parallel masking
     concatenated = torch.cat([grid_scaling, anchor], dim=-1)
     concatenated_repeated = repeat(concatenated, 'n (c) -> (n k) (c)', k=pc.n_offsets)
-    concatenated_all = torch.cat([concatenated_repeated, diffuse_color, scale_rot, offsets, normal1 ,normal2, specular,roughness,features_rest], dim=-1)
+    concatenated_all = torch.cat([concatenated_repeated, diffuse_color, scale_rot, offsets, normal1 ,normal2, specular,roughness], dim=-1)
     masked = concatenated_all[mask]
-    scaling_repeat, repeat_anchor, diffuse_color, scale_rot, offsets, normal1 ,normal2, specular,roughness,features_rest = masked.split([6, 3, 3, 7, 3,  3, 3, 3, 1, 3], dim=-1)
+    scaling_repeat, repeat_anchor, diffuse_color, scale_rot, offsets, normal1 ,normal2, specular,roughness = masked.split([6, 3, 3, 7, 3,  3, 3, 3, 1], dim=-1)
     
     # post-process cov
     scaling = scaling_repeat[:,3:] * torch.sigmoid(scale_rot[:,:3])
@@ -135,9 +135,9 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
 
     # 返回用于光照计算的组件
     if is_training:
-        return xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask , normal1, normal2, specular, roughness, features_rest
+        return xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask , normal1, normal2, specular, roughness, 
     else:
-        return xyz, diffuse_color, opacity, scaling, rot , normal1, normal2, specular, roughness, features_rest
+        return xyz, diffuse_color, opacity, scaling, rot , normal1, normal2, specular, roughness,
 
 
 def render_normal(viewpoint_cam, depth, bg_color, alpha):
@@ -167,7 +167,7 @@ def normalize_normal_inplace(normal, alpha):
     fg_mask = (alpha[None,...]>0.).repeat(3, 1, 1)
     normal = torch.where(fg_mask, torch.nn.functional.normalize(normal, p=2, dim=0), normal)
 
-def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, visible_mask=None, retain_grad=False):
+def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, visible_mask=None, retain_grad=False , pbr = False):
     """
     Render the scene. 
     
@@ -178,9 +178,9 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     is_training = pc.get_color_mlp.training
         
     if is_training:
-        xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask, normal1, normal2, specular, roughness, features_rest = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
+        xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask, normal1, normal2, specular, roughness = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
     else:
-        xyz, diffuse_color, opacity, scaling, rot, normal1, normal2, specular, roughness, features_rest = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
+        xyz, diffuse_color, opacity, scaling, rot, normal1, normal2, specular, roughness = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
 
     # # 计算光照
     # # 使用可学习的光源方向
@@ -219,11 +219,14 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     
     normal, delta_normal = pc.get_normal(normal1, normal2,scaling,rot,dir_pp_normalized=dir_pp_normalized, return_delta=True) # (N, 3) 
+    
+    # 相机空间下的法线
+    normal = normal @ viewpoint_camera.world_view_transform[:3, :3]
     delta_normal_norm = delta_normal.norm(dim=1, keepdim=True)   
 
     specular  = specular # (N*k, 3)
     roughness = roughness # (N*k, 1)
-    features_rest = features_rest # (N*k, 3)
+    # features_rest = features_rest # (N*k, 3)
 
     # print("==============shape=====================")
     # print(gb_pos.shape)
@@ -234,7 +237,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # print(view_pos.shape)
     # print("==============shape=====================")
 
-    color, brdf_pkg = pc.brdf_mlp.shade(gb_pos[None, None, ...], normal[None, None, ...], diffuse_color[None, None, ...], specular[None, None, ...], roughness[None, None, ...], view_pos[None, None, ...])
+    if pbr:
+        color, brdf_pkg = pc.brdf_mlp.shade(gb_pos[None, None, ...], normal[None, None, ...], diffuse_color[None, None, ...], specular[None, None, ...], roughness[None, None, ...], view_pos[None, None, ...])
     # color = diffuse_color
     # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",color.shape)  # 必须为 [1,1,N,3]
     # colors_precomp = color.squeeze() # (N, 3)
@@ -284,13 +288,16 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
     
     # 修改后（压缩维度 + 恢复梯度）
-    colors_precomp = color.squeeze()  # [1,1,N,3] -> [N,3]
+    if pbr:
+        colors_precomp = color.squeeze()  # [1,1,N,3] -> [N,3]
+    else:
+        colors_precomp = diffuse_color
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     rendered_image, radii = rasterizer(
         means3D = xyz,
         means2D = screenspace_points,
         shs = None,
-        colors_precomp = colors_precomp,
+        colors_precomp = colors_precomp,  
         opacities = opacity,
         scales = scaling,
         rotations = rot,

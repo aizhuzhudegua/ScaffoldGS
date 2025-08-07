@@ -135,12 +135,16 @@ def safe_state(silent):
 
 # 最短轴计算
 def get_minimum_axis(scales, rotations):
-    sorted_idx = torch.argsort(scales, descending=False, dim=-1)
-    R = build_rotation(rotations)
-    R_sorted = torch.gather(R, dim=2, index=sorted_idx[:,None,:].repeat(1, 3, 1)).squeeze()
-    x_axis = R_sorted[:,0,:] # normalized by defaut
+    # sorted_idx = torch.argsort(scales, descending=False, dim=-1)
+    # R = build_rotation(rotations)
+    # R_sorted = torch.gather(R, dim=2, index=sorted_idx[:,None,:].repeat(1, 3, 1)).squeeze()
+    # x_axis = R_sorted[:,0,:] # normalized by defaut
 
-    return x_axis
+    # return x_axis
+    R = build_rotation(rotations)
+    smallest_axis_idx = scales.min(dim=-1)[1][..., None, None].expand(-1, 3, -1)
+    smallest_axis = R.gather(2, smallest_axis_idx)
+    return smallest_axis.squeeze(dim=2)
 
 
 # 根据给定的法向量（normal）和视图方向（viewdir），调整法向量的方向

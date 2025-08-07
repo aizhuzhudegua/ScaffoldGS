@@ -190,10 +190,10 @@ class OptimizationParams(ParamGroup):
         self.success_threshold = 0.8
         self.densify_grad_threshold = 0.0002
 
-        self.normal_reg_from_iter = 20_000
+        self.normal_reg_from_iter = 0
         self.normal_reg_util_iter = 30_000
         self.lambda_zero_one = 1e-3
-        self.lambda_predicted_normal = 2e-1
+        self.lambda_predicted_normal = 0.01
         self.lambda_delta_reg = 1e-3
         self.fix_brdf_lr = 0
         super().__init__(parser, "Optimization Parameters")
