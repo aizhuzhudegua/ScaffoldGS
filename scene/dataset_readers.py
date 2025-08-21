@@ -215,6 +215,20 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         except:
             fovx = None
 
+        # 从根级别获取焦距参数
+        if "fl_x" in contents and "fl_y" in contents:
+            fl_x = contents["fl_x"]
+            fl_y = contents["fl_y"]
+        elif "focal_x" in contents and "focal_y" in contents:
+            fl_x = contents["focal_x"]
+            fl_y = contents["focal_y"]
+        else:
+            raise ValueError("Could not find focal length information in transforms file")
+        
+        # 获取全局图像尺寸（如果可用）
+        global_w = contents.get("w")
+        global_h = contents.get("h")
+
         frames = contents["frames"]
         # check if filename already contain postfix
         if frames[0]["file_path"].split('.')[-1] in ['jpg', 'jpeg', 'JPG', 'png']:
@@ -258,15 +272,22 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
             image = Image.open(image_path)
 
             if undistorted:
+                # 这里也需要修改，使用根级别的 cx, cy 等参数
                 mtx = np.array(
                     [
-                        [frame["fl_x"], 0, frame["cx"]],
-                        [0, frame["fl_y"], frame["cy"]],
+                        [fl_x, 0, contents.get("cx", image.size[0]/2)],
+                        [0, fl_y, contents.get("cy", image.size[1]/2)],
                         [0, 0, 1.0],
                     ],
                     dtype=np.float32,
                 )
-                dist = np.array([frame["k1"], frame["k2"], frame["p1"], frame["p2"], frame["k3"]], dtype=np.float32)
+                dist = np.array([
+                    contents.get("k1", 0), 
+                    contents.get("k2", 0), 
+                    contents.get("p1", 0), 
+                    contents.get("p2", 0), 
+                    contents.get("k3", 0)
+                ], dtype=np.float32)
                 im_data = np.array(image.convert("RGB"))
                 arr = cv2.undistort(im_data / 255.0, mtx, dist, None, mtx)
                 image = Image.fromarray(np.array(arr*255.0, dtype=np.byte), "RGB")
@@ -282,9 +303,15 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
                 FovY = fovy 
                 FovX = fovx
             else:
-                # given focal in pixel unit
-                FovY = focal2fov(frame["fl_y"], image.size[1])
-                FovX = focal2fov(frame["fl_x"], image.size[0])
+                # 使用根级别的焦距参数
+                if global_w is not None and global_h is not None:
+                    # 如果有全局尺寸，使用全局尺寸
+                    FovY = focal2fov(fl_y, global_h)
+                    FovX = focal2fov(fl_x, global_w)
+                else:
+                    # 否则使用当前图像的尺寸
+                    FovY = focal2fov(fl_y, image.size[1])
+                    FovX = focal2fov(fl_x, image.size[0])
 
             cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                             image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))
