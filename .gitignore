@@ -2,6 +2,7 @@
 .vscode
 temp*
 outputs*
+output*
 debug*
 log*
 view*
