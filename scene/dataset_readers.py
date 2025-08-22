@@ -222,8 +222,8 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
         elif "focal_x" in contents and "focal_y" in contents:
             fl_x = contents["focal_x"]
             fl_y = contents["focal_y"]
-        else:
-            raise ValueError("Could not find focal length information in transforms file")
+        # else:
+        #     raise ValueError("Could not find focal length information in transforms file")
         
         # 获取全局图像尺寸（如果可用）
         global_w = contents.get("w")
@@ -303,15 +303,10 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
                 FovY = fovy 
                 FovX = fovx
             else:
-                # 使用根级别的焦距参数
-                if global_w is not None and global_h is not None:
-                    # 如果有全局尺寸，使用全局尺寸
-                    FovY = focal2fov(fl_y, global_h)
-                    FovX = focal2fov(fl_x, global_w)
-                else:
-                    # 否则使用当前图像的尺寸
-                    FovY = focal2fov(fl_y, image.size[1])
-                    FovX = focal2fov(fl_x, image.size[0])
+                # 修改这里：直接使用 camera_angle_x 计算
+                FovX = contents["camera_angle_x"]
+                focal_length = fov2focal(FovX, image.size[0])
+                FovY = focal2fov(focal_length, image.size[1])
 
             cam_infos.append(CameraInfo(uid=idx, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
                             image_path=image_path, image_name=image_name, width=image.size[0], height=image.size[1]))

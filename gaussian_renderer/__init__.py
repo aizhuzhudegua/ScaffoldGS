@@ -65,7 +65,7 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     neural_opacity = neural_opacity.reshape([-1, 1])
     mask = (neural_opacity>0.0)
     mask = mask.view(-1)
-
+   
     # select opacity 
     opacity = neural_opacity[mask]
 

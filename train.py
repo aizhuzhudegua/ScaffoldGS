@@ -235,8 +235,9 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * ssim_loss + 0.001*scaling_reg
 
         for k in losses_extra.keys():
-            print(f'lambda_{k}: ' + getattr(opt, f'lambda_{k}'))
-            loss += getattr(opt, f'lambda_{k}')* losses_extra[k]
+            key = f'lambda_{k}'
+            lambda_ = getattr(opt, key)
+            loss += lambda_* losses_extra[k]
         loss.backward()
         
         # 记录Loss到TensorBoard
@@ -259,7 +260,9 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
 
             # print("=============psnr==============",psnr(image, gt_image).mean())
             # Log and save
-            training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger)
+            # training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), [10], scene, render, (pipe, background), wandb, logger)
+            training_report(writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger)
+           
             if (iteration in saving_iterations):
                 logger.info("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -330,6 +333,7 @@ def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elap
                 l1_test = 0.0
                 psnr_test = 0.0
                 
+                
                 if wandb is not None:
                     gt_image_list = []
                     render_image_list = []
@@ -337,8 +341,14 @@ def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elap
 
                 for idx, viewpoint in enumerate(config['cameras']):
                     voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, *renderArgs)
-                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
+                    image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask,pbr = True)["render"], 0.0, 1.0)
                     gt_image = torch.clamp(viewpoint.original_image.to("cuda"), 0.0, 1.0)
+                    
+                    tb_writer.add_image(config["name"] + '/gt_image', gt_image, global_step=iteration)
+                    tb_writer.add_image(config["name"] + '/image', image, global_step=iteration)
+                    tb_writer.add_image(config["name"] + '/erro', (gt_image-image).abs(), global_step=iteration)
+                    
+                    
                     if tb_writer and (idx < 30):
                         tb_writer.add_images(f'{dataset_name}/'+config['name'] + "_view_{}/render".format(viewpoint.image_name), image[None], global_step=iteration)
                         tb_writer.add_images(f'{dataset_name}/'+config['name'] + "_view_{}/errormap".format(viewpoint.image_name), (gt_image[None]-image[None]).abs(), global_step=iteration)
