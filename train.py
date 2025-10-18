@@ -190,7 +190,7 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
         #         losses_extra['delta_reg'] = delta_normal_loss(render_pkg["delta_normal_norm"], render_pkg["alpha"])
         #         writer.add_scalar('Loss/Delta_Reg', losses_extra['delta_reg'].item(), iteration)
         
-        if iteration > 5000:
+        if iteration > 0:
             losses_extra['predicted_normal'] = predicted_normal_loss(render_pkg["normal"], render_pkg["normal_ref"], render_pkg["alpha"])
             writer.add_scalar('Loss/predicted_normal', losses_extra['predicted_normal'], iteration)
             if "delta_normal_norm" in render_pkg.keys():

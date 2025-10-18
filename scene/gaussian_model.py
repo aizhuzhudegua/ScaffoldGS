@@ -162,14 +162,14 @@ class GaussianModel:
 
         # 定义两个 MLP 分别用于生成 _normals 和 _normals2
         self.mlp_normal1 = nn.Sequential(
-            nn.Linear(feat_dim + 3, feat_dim),
+            nn.Linear(feat_dim+3, feat_dim),
             #  nn.ReLU(True),
             nn.Linear(feat_dim, 3 * n_offsets),
             #  nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
         ).cuda()
 
         self.mlp_normal2 = nn.Sequential(
-            nn.Linear(feat_dim + 3, feat_dim),
+            nn.Linear(feat_dim+3, feat_dim),
             #  nn.ReLU(True),
             nn.Linear(feat_dim, 3 * n_offsets),
             #  nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
@@ -177,7 +177,7 @@ class GaussianModel:
 
         # 定义 MLP 用于生成 _speculars
         self.mlp_specular = nn.Sequential(
-            nn.Linear(feat_dim + 3, feat_dim),
+            nn.Linear(feat_dim+3, feat_dim),
             nn.ReLU(True),
             nn.Linear(feat_dim, 3 * n_offsets),
             nn.Softplus()  # 使用 sigmoid 确保高光系数在 [0, 1] 范围内
@@ -185,7 +185,7 @@ class GaussianModel:
 
         # 定义 MLP 用于生成 _roughnesses
         self.mlp_roughness = nn.Sequential(
-            nn.Linear(feat_dim + 3, feat_dim),
+            nn.Linear(feat_dim+3, feat_dim),
             nn.ReLU(True),
             nn.Linear(feat_dim, n_offsets),
             nn.Softplus()  # 使用softplus确保高光指数在[0,∞]范围内

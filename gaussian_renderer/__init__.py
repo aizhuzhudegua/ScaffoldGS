@@ -51,16 +51,17 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
 
     cat_local_view = torch.cat([feat, ob_view, ob_dist], dim=1) # [N, c+3+1]
     cat_local_view_wodist = torch.cat([feat, ob_view], dim=1) # [N, c+3] without dist
+    
     if pc.appearance_dim > 0:
         camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * viewpoint_camera.uid
         appearance = pc.get_appearance(camera_indicies)
 
     # get offset's opacity
-    if pc.add_opacity_dist:
-        neural_opacity = pc.get_opacity_mlp(cat_local_view) # [N, k]
-    else:
-        neural_opacity = pc.get_opacity_mlp(cat_local_view_wodist)
-
+    # if pc.add_opacity_dist:
+    #     neural_opacity = pc.get_opacity_mlp(cat_local_view) # [N, k]
+    # else:
+    #     neural_opacity = pc.get_opacity_mlp(cat_local_view_wodist)
+    neural_opacity = pc.get_opacity_mlp(cat_local_view_wodist)
     # opacity mask generation
     neural_opacity = neural_opacity.reshape([-1, 1])
     mask = (neural_opacity>0.0)
@@ -70,16 +71,19 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     opacity = neural_opacity[mask]
 
     # get offset's color (now as diffuse color)
-    if pc.appearance_dim > 0:
-        if pc.add_color_dist:
-            diffuse_color = pc.get_color_mlp(torch.cat([cat_local_view, appearance], dim=1))
-        else:
-            diffuse_color = pc.get_color_mlp(torch.cat([cat_local_view_wodist, appearance], dim=1))
-    else:
-        if pc.add_color_dist:
-            diffuse_color = pc.get_color_mlp(cat_local_view)
-        else:
-            diffuse_color = pc.get_color_mlp(cat_local_view_wodist)
+    # if pc.appearance_dim > 0:
+    #     if pc.add_color_dist:
+    #         diffuse_color = pc.get_color_mlp(torch.cat([cat_local_view, appearance], dim=1))
+    #     else:
+    #         diffuse_color = pc.get_color_mlp(torch.cat([cat_local_view_wodist, appearance], dim=1))
+    # else:
+    #     if pc.add_color_dist:
+    #         diffuse_color = pc.get_color_mlp(cat_local_view)
+    #     else:
+    #         diffuse_color = pc.get_color_mlp(cat_local_view_wodist)
+
+    # wo view feat
+    diffuse_color = pc.get_color_mlp(cat_local_view_wodist)
     diffuse_color = diffuse_color.reshape([anchor.shape[0]*pc.n_offsets, 3])
 
     # get offset's normal
@@ -106,10 +110,12 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
 
     
     # get offset's cov
-    if pc.add_cov_dist:
-        scale_rot = pc.get_cov_mlp(cat_local_view)
-    else:
-        scale_rot = pc.get_cov_mlp(cat_local_view_wodist)
+    # if pc.add_cov_dist:
+    #     scale_rot = pc.get_cov_mlp(cat_local_view)
+    # else:
+    #     scale_rot = pc.get_cov_mlp(cat_local_view_wodist)
+
+    scale_rot = pc.get_cov_mlp(cat_local_view_wodist)
     scale_rot = scale_rot.reshape([anchor.shape[0]*pc.n_offsets, 7]) # [mask]
     
     # offsets
