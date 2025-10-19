@@ -273,26 +273,26 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     else:
         colors_precomp = diffuse_color
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    rendered_image, radii = rasterizer(
-        means3D = xyz,
-        means2D = screenspace_points,
-        shs = None,
-        colors_precomp = colors_precomp,  
-        opacities = opacity,
-        scales = scaling,
-        rotations = rot,
-        cov3D_precomp = None)
+    # rendered_image, radii = rasterizer(
+    #     means3D = xyz,
+    #     means2D = screenspace_points,
+    #     shs = None,
+    #     colors_precomp = colors_precomp,  
+    #     opacities = opacity,
+    #     scales = scaling,
+    #     rotations = rot,
+    #     cov3D_precomp = None)
     
     # 渲染法线图
     # Calculate Gaussians projected depth
-    p_hom = torch.cat([xyz, torch.ones_like(xyz[...,:1])], -1).unsqueeze(-1)
-    p_view = torch.matmul(viewpoint_camera.world_view_transform.transpose(0,1), p_hom)
-    p_view = p_view[...,:3,:]
-    depth = p_view.squeeze()[...,2:3]
-    depth = depth.repeat(1,3)
+    # p_hom = torch.cat([xyz, torch.ones_like(xyz[...,:1])], -1).unsqueeze(-1)
+    # p_view = torch.matmul(viewpoint_camera.world_view_transform.transpose(0,1), p_hom)
+    # p_view = p_view[...,:3,:]
+    # depth = p_view.squeeze()[...,2:3]
+    # depth = depth.repeat(1,3)
 
 
-    render_extras = {"depth": depth}
+    render_extras = {}
    
     normal_normed = 0.5*normal + 0.5  # range (-1, 1) -> (0, 1)
     render_extras.update({"normal": normal_normed})
@@ -388,7 +388,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # 渲染法线图
     # out_extras["normal_ref"] = render_normal(viewpoint_cam=viewpoint_camera, depth=out_extras['depth'][0], bg_color=bg_color, alpha=out_extras["alpha"][0])
     out_extras["normal_ref"] = rendered_pseudo_normal
-
+    out_extras["alpha"] = rendered_opacity
+    out_extras["depth"] = rendered_depth
     # normalize_normal_inplace(out_extras["normal"], out_extras["alpha"][0])
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
 
