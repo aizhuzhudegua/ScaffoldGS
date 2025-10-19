@@ -12,6 +12,7 @@
 from errno import EEXIST
 from os import makedirs, path
 import os
+import torch
 
 def mkdir_p(folder_path):
     # Creates a directory. equivalent to using mkdir -p on the command line
@@ -26,3 +27,24 @@ def mkdir_p(folder_path):
 def searchForMaxIteration(folder):
     saved_iters = [int(fname.split("_")[-1]) for fname in os.listdir(folder)]
     return max(saved_iters)
+class Timing:
+    """
+    Timing environment
+    usage:
+    with Timing("message"):
+        your commands here
+    will print CUDA runtime in ms
+    """
+
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        self.start = torch.cuda.Event(enable_timing=True)
+        self.end = torch.cuda.Event(enable_timing=True)
+        self.start.record()
+
+    def __exit__(self, type, value, traceback):
+        self.end.record()
+        torch.cuda.synchronize()
+        print(self.name, "elapsed", self.start.elapsed_time(self.end), "ms")
