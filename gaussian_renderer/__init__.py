@@ -18,7 +18,10 @@ from utils.sh_utils import eval_sh
 from utils.graphics_utils import normal_from_depth_image
 from utils.general_utils import flip_align_view
 from scene.NVDIFFREC import extract_env_map
-import r3dg_rasterization
+from .r3dg_rasterization import (
+    GaussianRasterizationSettings as RasterSettings,
+    GaussianRasterizer as Rasterizer
+)
 
 def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask=None, is_training=False):
     ## view frustum filtering for acceleration    
@@ -317,7 +320,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     out_extras["normal"] = (out_extras["normal"] - 0.5) * 2. # range (0, 1) -> (-1, 1)
     
     
-    r3dg_raster_settings = r3dg_rasterization.GaussianRasterizationSettings(
+    r3dg_raster_settings = RasterSettings(
         image_height=int(viewpoint_camera.image_height),
         image_width=int(viewpoint_camera.image_width),
         tanfovx=tanfovx,
@@ -340,7 +343,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     depths = (xyz_homo @ viewpoint_camera.world_view_transform)[:, 2:3]
     depths2 = depths.square()
     features = torch.cat([normal, depths, depths2], dim=-1)
-    r3dg_rasterizer = r3dg_rasterization.GaussianRasterizer(raster_settings=r3dg_raster_settings)
+    r3dg_rasterizer = Rasterizer(raster_settings=r3dg_raster_settings)
      # Rasterize visible Gaussians to image, obtain their radii (on screen).
     (num_rendered, num_contrib, rendered_image, rendered_opacity, rendered_depth,
      rendered_feature, rendered_pseudo_normal, rendered_surface_xyz, weights, radii) = r3dg_rasterizer(
