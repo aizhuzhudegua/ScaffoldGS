@@ -1,6 +1,6 @@
 exp_name='baseline'
 
-voxel_size=0.01
+voxel_size=0.00001
 update_init_factor=16
 appearance_dim=0
 ratio=1

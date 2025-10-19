@@ -25,6 +25,29 @@ from scene.embedding import Embedding
 from scene.NVDIFFREC import create_trainable_env_rnd, load_env
 from utils.general_utils import get_minimum_axis, flip_align_view
     
+# 1. 定义通道注意力模块（SE模块）
+class ChannelAttention(nn.Module):
+    def __init__(self, in_channels, reduction=4):
+        super().__init__()
+        # 压缩（Squeeze）：全局平均池化，将通道维度压缩为1
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        # 激励（Excitation）：通过MLP学习通道权重
+        self.fc = nn.Sequential(
+            nn.Linear(in_channels, in_channels // reduction, bias=False),
+            nn.ReLU(True),
+            nn.Linear(in_channels // reduction, in_channels, bias=False),
+            nn.Sigmoid()  # 输出通道权重（0~1）
+        )
+
+    def forward(self, x):
+        # x: [N, in_channels]（N为锚点数量，in_channels为输入特征维度）
+        b, c = x.size()
+        # 压缩：[N, c] → [N, 1]
+        y = self.avg_pool(x.unsqueeze(2)).squeeze(2)
+        # 激励：[N, 1] → [N, c]（学习通道权重）
+        y = self.fc(y)
+        # 应用权重：[N, c] * [N, c] → [N, c]
+        return x * y
 class GaussianModel:
 
     def setup_functions(self):
@@ -130,6 +153,7 @@ class GaussianModel:
         self.mlp_color = nn.Sequential(
             nn.Linear(feat_dim+3+self.color_dist_dim+self.appearance_dim, feat_dim),
             nn.ReLU(True),
+            ChannelAttention(feat_dim),
             nn.Linear(feat_dim, 3*self.n_offsets),
             nn.Sigmoid()
         ).cuda()
@@ -493,6 +517,11 @@ class GaussianModel:
                 {'params': self.mlp_normal1.parameters(), 'lr': training_args.mlp_normal1_lr_init, "name": "mlp_normal1"},
                 {'params': self.mlp_normal2.parameters(), 'lr': training_args.mlp_normal2_lr_init, "name": "mlp_normal2"},
                 # {'params': self.mlp_features_rest.parameters(), 'lr': training_args.mlp_features_rest_lr_init, "name": "mlp_features_rest"},
+                {
+                    'params': self.brdf_mlp.parameters(), 
+                    'lr': 0.0001,  # 单独设置初始LR（如0.0001，比材质MLP低）
+                    'name': "brdf_mlp"
+                }
             ]
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
@@ -540,7 +569,12 @@ class GaussianModel:
                                                     lr_final=training_args.mlp_normal2_lr_final,
                                                     lr_delay_mult=training_args.mlp_normal2_lr_delay_mult,
                                                     max_steps=training_args.mlp_normal2_lr_max_steps)
-        
+        self.brdf_mlp_scheduler_args = get_expon_lr_func(
+                                                    lr_init=1e-4,
+                                                    lr_final=1e-6,
+                                                    lr_delay_mult=2.0,  # 延迟衰减，让Cubemap充分优化
+                                                    max_steps=training_args.iterations
+                                                )
         # self.mlp_features_rest_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_features_rest_lr_init,
         #                                             lr_final=training_args.mlp_features_rest_lr_final,
         #                                             lr_delay_mult=training_args.mlp_features_rest_lr_delay_mult,
@@ -591,6 +625,11 @@ class GaussianModel:
             if param_group["name"] == "mlp_normal2":
                 lr = self.mlp_normal2_scheduler_args(iteration)
                 param_group['lr'] = lr
+            if param_group["name"] == "brdf_mlp":
+                # 为Cubemap设置更慢的学习率衰减
+                lr = self.brdf_mlp_scheduler_args(iteration)
+                param_group['lr'] = lr
+
             # if param_group["name"] == "mlp_features_rest":
             #     lr = self.mlp_features_rest_scheduler_args(iteration)
             #     param_group['lr'] = lr

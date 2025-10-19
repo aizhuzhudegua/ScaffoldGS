@@ -18,6 +18,7 @@ from utils.sh_utils import eval_sh
 from utils.graphics_utils import normal_from_depth_image
 from utils.general_utils import flip_align_view
 from scene.NVDIFFREC import extract_env_map
+import r3dg_rasterization
 
 def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask=None, is_training=False):
     ## view frustum filtering for acceleration    
@@ -315,39 +316,79 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     out_extras["normal"] = (out_extras["normal"] - 0.5) * 2. # range (0, 1) -> (-1, 1)
     
+    
+    r3dg_raster_settings = r3dg_rasterization.GaussianRasterizationSettings(
+        image_height=int(viewpoint_camera.image_height),
+        image_width=int(viewpoint_camera.image_width),
+        tanfovx=tanfovx,
+        tanfovy=tanfovy,
+        cx=float(viewpoint_camera.intrinsics[0, 2]),
+        cy=float(viewpoint_camera.intrinsics[1, 2]),
+        bg=bg_color,
+        scale_modifier=scaling_modifier,
+        viewmatrix=viewpoint_camera.world_view_transform,
+        projmatrix=viewpoint_camera.full_proj_transform,
+        sh_degree=pc.active_sh_degree,
+        campos=viewpoint_camera.camera_center,
+        prefiltered=False,
+        backward_geometry=True,
+        computer_pseudo_normal=True,
+        debug=pipe.debug
+    )
+
+    xyz_homo = torch.cat([xyz, torch.ones_like(xyz[:, :1])], dim=-1)
+    depths = (xyz_homo @ viewpoint_camera.world_view_transform)[:, 2:3]
+    depths2 = depths.square()
+    features = torch.cat([normal, depths, depths2], dim=-1)
+    r3dg_rasterizer = r3dg_rasterization.GaussianRasterizer(raster_settings=r3dg_raster_settings)
+     # Rasterize visible Gaussians to image, obtain their radii (on screen).
+    (num_rendered, num_contrib, rendered_image, rendered_opacity, rendered_depth,
+     rendered_feature, rendered_pseudo_normal, rendered_surface_xyz, weights, radii) = r3dg_rasterizer(
+        means3D=xyz,
+        means2D=screenspace_points,
+        shs=None,
+        colors_precomp=colors_precomp,
+        opacities=opacity,
+        scales=scaling,
+        rotations=rot,
+        cov3D_precomp=None,
+        features=features,
+    )
+
     # Rasterize visible Gaussians to alpha mask image. 
-    raster_settings_alpha = GaussianRasterizationSettings(
-            image_height=int(viewpoint_camera.image_height),
-            image_width=int(viewpoint_camera.image_width),
-            tanfovx=tanfovx,
-            tanfovy=tanfovy,
-            bg=torch.tensor([0,0,0], dtype=torch.float32, device="cuda"),
-            scale_modifier=scaling_modifier,
-            viewmatrix=viewpoint_camera.world_view_transform,
-            projmatrix=viewpoint_camera.full_proj_transform,
-            sh_degree=1,
-            campos=viewpoint_camera.camera_center,
-            prefiltered=False,
-            debug=pipe.debug
-        )
-    rasterizer_alpha = GaussianRasterizer(raster_settings=raster_settings_alpha)
-    alpha = torch.ones_like(xyz) 
+    # raster_settings_alpha = GaussianRasterizationSettings(
+    #         image_height=int(viewpoint_camera.image_height),
+    #         image_width=int(viewpoint_camera.image_width),
+    #         tanfovx=tanfovx,
+    #         tanfovy=tanfovy,
+    #         bg=torch.tensor([0,0,0], dtype=torch.float32, device="cuda"),
+    #         scale_modifier=scaling_modifier,
+    #         viewmatrix=viewpoint_camera.world_view_transform,
+    #         projmatrix=viewpoint_camera.full_proj_transform,
+    #         sh_degree=1,
+    #         campos=viewpoint_camera.camera_center,
+    #         prefiltered=False,
+    #         debug=pipe.debug
+    #     )
+    # rasterizer_alpha = GaussianRasterizer(raster_settings=raster_settings_alpha)
+    # alpha = torch.ones_like(xyz) 
 
 
-    out_extras["alpha"] =  rasterizer_alpha(
-        means3D = xyz,
-        means2D = screenspace_points,
-        shs = None,
-        colors_precomp = alpha,
-        opacities = opacity,
-        scales = scaling,
-        rotations = rot,
-        cov3D_precomp = None)[0]
+    # out_extras["alpha"] =  rasterizer_alpha(
+    #     means3D = xyz,
+    #     means2D = screenspace_points,
+    #     shs = None,
+    #     colors_precomp = alpha,
+    #     opacities = opacity,
+    #     scales = scaling,
+    #     rotations = rot,
+    #     cov3D_precomp = None)[0]
     
     # Render normal from depth image, and alpha blend with the background. 
     # 渲染法线图
-    out_extras["normal_ref"] = render_normal(viewpoint_cam=viewpoint_camera, depth=out_extras['depth'][0], bg_color=bg_color, alpha=out_extras["alpha"][0])
-    
+    # out_extras["normal_ref"] = render_normal(viewpoint_cam=viewpoint_camera, depth=out_extras['depth'][0], bg_color=bg_color, alpha=out_extras["alpha"][0])
+    out_extras["normal_ref"] = rendered_pseudo_normal
+
     # normalize_normal_inplace(out_extras["normal"], out_extras["alpha"][0])
     # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
 
