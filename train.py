@@ -43,6 +43,7 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+from gaussian_renderer import render_lighting
 
 # torch.set_num_threads(32)
 lpips_fn = lpips.LPIPS(net='vgg').to('cuda')
@@ -210,6 +211,7 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
             writer.add_image('Render/normal_ref', render_pkg["normal_ref"],global_step=iteration)
             writer.add_image('Render/image', image, global_step=iteration)
             writer.add_image('Render/gt_image', gt_image, global_step=iteration)
+            writer.add_image('Render/envmap', render_lighting(gaussians), global_step=iteration)
 
         # # 每1000轮保存图像
         # if iteration % 1000 == 0:

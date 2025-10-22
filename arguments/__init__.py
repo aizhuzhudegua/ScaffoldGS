@@ -170,12 +170,17 @@ class OptimizationParams(ParamGroup):
         self.mlp_features_rest_lr_final = 0.00002  
         self.mlp_features_rest_lr_delay_mult = 0.01
         self.mlp_features_rest_lr_max_steps = 30_000
+
+        self.mlp_brdf_lr_init = 1e-4
+        self.mlp_brdf_lr_final = 5e-6
+        self.mlp_brdf_lr_delay_mult = 0.01
         # 额外mlp的学习率 ------------------
 
         self.appearance_lr_init = 0.05
         self.appearance_lr_final = 0.0005
         self.appearance_lr_delay_mult = 0.01
         self.appearance_lr_max_steps = 30_000
+        
 
         self.percent_dense = 0.01
         self.lambda_dssim = 0.2
@@ -193,8 +198,10 @@ class OptimizationParams(ParamGroup):
         self.normal_reg_from_iter = 0
         self.normal_reg_util_iter = 30_000
         self.lambda_zero_one = 1e-3
-        self.lambda_predicted_normal = 0.1 # 0.01
+        self.lambda_predicted_normal = 0.2 # 0.01
         self.lambda_delta_reg = 1e-3
+
+        
         self.fix_brdf_lr = 0
         super().__init__(parser, "Optimization Parameters")
 

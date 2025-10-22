@@ -144,9 +144,9 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
 
     # 返回用于光照计算的组件
     if is_training:
-        return xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask , normal1, normal2, specular, roughness, 
+        return xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask , normal1, normal2, specular, roughness
     else:
-        return xyz, diffuse_color, opacity, scaling, rot , normal1, normal2, specular, roughness,
+        return xyz, diffuse_color, opacity, scaling, rot , normal1, normal2, specular, roughness
 
 
 def render_normal(viewpoint_cam, depth, bg_color, alpha):
@@ -187,7 +187,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     is_training = pc.get_color_mlp.training
         
     if is_training:
-        xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask, normal1, normal2, specular, roughness = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
+        xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask, normal1, normal2, specular, roughness  = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
     else:
         xyz, diffuse_color, opacity, scaling, rot, normal1, normal2, specular, roughness = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
 
@@ -209,7 +209,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     specular  = specular # (N*k, 3)
     roughness = roughness # (N*k, 1)
-    # features_rest = features_rest # (N*k, 3)
 
     # print("==============shape=====================")
     # print(gb_pos.shape)
@@ -221,7 +220,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # print("==============shape=====================")
 
     if pbr:
-        color, brdf_pkg = pc.brdf_mlp.shade(gb_pos[None, None, ...], normal[None, None, ...], diffuse_color[None, None, ...], specular[None, None, ...], roughness[None, None, ...], view_pos[None, None, ...])
+        color, brdf_pkg = pc.brdf_mlp.shade(gb_pos[None, None, ...], normal[None, None, ...].detach(), diffuse_color[None, None, ...], specular[None, None, ...], roughness[None, None, ...], view_pos[None, None, ...])
     # color = diffuse_color
     # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",color.shape)  # 必须为 [1,1,N,3]
     # colors_precomp = color.squeeze() # (N, 3)

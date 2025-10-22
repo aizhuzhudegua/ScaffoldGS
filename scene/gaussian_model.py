@@ -153,7 +153,7 @@ class GaussianModel:
         self.mlp_color = nn.Sequential(
             nn.Linear(feat_dim+3+self.color_dist_dim+self.appearance_dim, feat_dim),
             nn.ReLU(True),
-            ChannelAttention(feat_dim),
+            # ChannelAttention(feat_dim),
             nn.Linear(feat_dim, 3*self.n_offsets),
             nn.Sigmoid()
         ).cuda()
@@ -519,8 +519,9 @@ class GaussianModel:
                 # {'params': self.mlp_features_rest.parameters(), 'lr': training_args.mlp_features_rest_lr_init, "name": "mlp_features_rest"},
                 {
                     'params': self.brdf_mlp.parameters(), 
-                    'lr': 0.0001,  # 单独设置初始LR（如0.0001，比材质MLP低）
-                    'name': "brdf_mlp"
+                    'lr': training_args.mlp_brdf_lr_init,  # 单独设置初始LR（如0.0001，比材质MLP低）
+                    'name': "brdf_mlp",
+                    #'weight_decay': 1e-5  # 可选：加小权重衰减，避免envmap过拟合
                 }
             ]
 
@@ -570,9 +571,9 @@ class GaussianModel:
                                                     lr_delay_mult=training_args.mlp_normal2_lr_delay_mult,
                                                     max_steps=training_args.mlp_normal2_lr_max_steps)
         self.brdf_mlp_scheduler_args = get_expon_lr_func(
-                                                    lr_init=1e-4,
-                                                    lr_final=1e-6,
-                                                    lr_delay_mult=2.0,  # 延迟衰减，让Cubemap充分优化
+                                                    lr_init=training_args.mlp_brdf_lr_init,
+                                                    lr_final=training_args.mlp_brdf_lr_final,
+                                                    lr_delay_mult=training_args.mlp_brdf_lr_delay_mult,  # 延迟衰减，让Cubemap充分优化
                                                     max_steps=training_args.iterations
                                                 )
         # self.mlp_features_rest_scheduler_args = get_expon_lr_func(lr_init=training_args.mlp_features_rest_lr_init,
