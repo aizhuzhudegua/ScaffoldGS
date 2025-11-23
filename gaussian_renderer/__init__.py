@@ -32,6 +32,7 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     anchor = pc.get_anchor[visible_mask]
     grid_offsets = pc._offset[visible_mask]
     grid_scaling = pc.get_scaling[visible_mask]
+    n_visible_anchors = anchor.shape[0]  # 可见锚点数量
 
     ## get view properties for anchor
     ob_view = anchor - viewpoint_camera.camera_center
@@ -61,10 +62,6 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
         appearance = pc.get_appearance(camera_indicies)
 
     # get offset's opacity
-    # if pc.add_opacity_dist:
-    #     neural_opacity = pc.get_opacity_mlp(cat_local_view) # [N, k]
-    # else:
-    #     neural_opacity = pc.get_opacity_mlp(cat_local_view_wodist)
     neural_opacity = pc.get_opacity_mlp(cat_local_view_wodist)
     # opacity mask generation
     neural_opacity = neural_opacity.reshape([-1, 1])
@@ -75,28 +72,8 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     opacity = neural_opacity[mask]
 
     # get offset's color (now as diffuse color)
-    # if pc.appearance_dim > 0:
-    #     if pc.add_color_dist:
-    #         diffuse_color = pc.get_color_mlp(torch.cat([cat_local_view, appearance], dim=1))
-    #     else:
-    #         diffuse_color = pc.get_color_mlp(torch.cat([cat_local_view_wodist, appearance], dim=1))
-    # else:
-    #     if pc.add_color_dist:
-    #         diffuse_color = pc.get_color_mlp(cat_local_view)
-    #     else:
-    #         diffuse_color = pc.get_color_mlp(cat_local_view_wodist)
-
-    # wo view feat
     diffuse_color = pc.get_color_mlp(cat_local_view_wodist)
     diffuse_color = diffuse_color.reshape([anchor.shape[0]*pc.n_offsets, 3])
-
-    # get offset's normal
-    # if pc.add_color_dist:
-    #     normal = pc.get_normal_mlp(cat_local_view)
-    # else:
-    #     normal = pc.get_normal_mlp(cat_local_view_wodist)
-    # normal = normal.reshape([anchor.shape[0]*pc.n_offsets, 3])
-    # normal = torch.nn.functional.normalize(normal, dim=-1)  # 确保法线是单位向量
 
     specular = pc.get_specular_mlp(cat_local_view_wodist)
     specular = specular.reshape([anchor.shape[0]*pc.n_offsets, 3])
@@ -104,33 +81,43 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     roughness = pc.get_roughness_mlp(cat_local_view_wodist)
     roughness = roughness.reshape([anchor.shape[0]*pc.n_offsets, 1])
 
-    # features_rest = pc.get_features_rest_mlp(cat_local_view_wodist)
-    # features_rest = features_rest.reshape([anchor.shape[0]*pc.n_offsets, 3])
-
     normal1 = pc.get_normal1_mlp(cat_local_view_wodist)
     normal1 = normal1.reshape([anchor.shape[0]*pc.n_offsets, 3])
     normal2 = pc.get_normal2_mlp(cat_local_view_wodist)
     normal2 = normal2.reshape([anchor.shape[0]*pc.n_offsets, 3])
 
-    
     # get offset's cov
-    # if pc.add_cov_dist:
-    #     scale_rot = pc.get_cov_mlp(cat_local_view)
-    # else:
-    #     scale_rot = pc.get_cov_mlp(cat_local_view_wodist)
-
     scale_rot = pc.get_cov_mlp(cat_local_view_wodist)
     scale_rot = scale_rot.reshape([anchor.shape[0]*pc.n_offsets, 7]) # [mask]
     
     # offsets
     offsets = grid_offsets.view([-1, 3]) # [mask]
+
+    # -------------------------- 新增：生成锚点-高斯归属索引 --------------------------
+    # 1. 生成可见锚点的原始索引（0 ~ n_visible_anchors-1）
+    anchor_indices_raw = torch.arange(n_visible_anchors, device=anchor.device)  # [n_visible_anchors]
+    # 2. 复制索引：每个锚点的索引重复k次（与下属高斯数量匹配）
+    anchor_indices_repeated = repeat(anchor_indices_raw, 'n -> (n k)', k=pc.n_offsets)  # [n_visible_anchors * k]
+    # -----------------------------------------------------------------------------
     
-    # combine for parallel masking
+    # combine for parallel masking：新增锚点索引拼接
     concatenated = torch.cat([grid_scaling, anchor], dim=-1)
     concatenated_repeated = repeat(concatenated, 'n (c) -> (n k) (c)', k=pc.n_offsets)
-    concatenated_all = torch.cat([concatenated_repeated, diffuse_color, scale_rot, offsets, normal1 ,normal2, specular,roughness], dim=-1)
+    # 拼接时加入复制后的锚点索引（最后一列）
+    concatenated_all = torch.cat([
+        concatenated_repeated, diffuse_color, scale_rot, offsets, 
+        normal1, normal2, specular, roughness, 
+        anchor_indices_repeated.unsqueeze(1)  # 新增：锚点索引列
+    ], dim=-1)
+    
     masked = concatenated_all[mask]
-    scaling_repeat, repeat_anchor, diffuse_color, scale_rot, offsets, normal1 ,normal2, specular,roughness = masked.split([6, 3, 3, 7, 3,  3, 3, 3, 1], dim=-1)
+    # 拆分时同步提取锚点索引（调整split列数，最后1列为索引）
+    scaling_repeat, repeat_anchor, diffuse_color, scale_rot, offsets, normal1, normal2, specular, roughness, anchor_indices_valid = masked.split(
+        [6, 3, 3, 7, 3, 3, 3, 3, 1, 1],  # 最后一个1对应锚点索引
+        dim=-1
+    )
+    # 索引转长整型并压缩维度
+    anchor_indices_valid = anchor_indices_valid.long().squeeze(1)  # [N]，N为有效高斯数量
     
     # post-process cov
     scaling = scaling_repeat[:,3:] * torch.sigmoid(scale_rot[:,:3])
@@ -140,13 +127,11 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     offsets = offsets * scaling_repeat[:,:3]
     xyz = repeat_anchor + offsets
 
-
-
-    # 返回用于光照计算的组件
+    # 返回新增的锚点索引（用于后续法线平均）
     if is_training:
-        return xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask , normal1, normal2, specular, roughness
+        return xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask, normal1, normal2, specular, roughness, anchor_indices_valid
     else:
-        return xyz, diffuse_color, opacity, scaling, rot , normal1, normal2, specular, roughness
+        return xyz, diffuse_color, opacity, scaling, rot, normal1, normal2, specular, roughness, anchor_indices_valid
 
 
 def render_normal(viewpoint_cam, depth, bg_color, alpha):
@@ -186,59 +171,40 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # 是否训练了颜色mlp
     is_training = pc.get_color_mlp.training
         
+    # 接收新增的锚点索引
     if is_training:
-        xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask, normal1, normal2, specular, roughness  = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
+        xyz, diffuse_color, opacity, scaling, rot, neural_opacity, mask, normal1, normal2, specular, roughness, anchor_indices_valid  = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
     else:
-        xyz, diffuse_color, opacity, scaling, rot, normal1, normal2, specular, roughness = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
+        xyz, diffuse_color, opacity, scaling, rot, normal1, normal2, specular, roughness, anchor_indices_valid = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
 
 
     # 执行这里的shading
-    gb_pos = xyz # (N*k, 3) 
+    gb_pos = xyz # (N, 3)，N为有效高斯数量
     view_pos = viewpoint_camera.camera_center.repeat(gb_pos.shape[0], 1) # (N, 3)
 
     # 计算每个高斯的视角方向
     dir_pp = (gb_pos - view_pos)
-    dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True) # (N*k, 3)
+    dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True) # (N, 3)
 
-    
-    normal, delta_normal = pc.get_normal(normal1, normal2,scaling,rot,dir_pp_normalized=dir_pp_normalized, return_delta=True) # (N, 3) 
-    
-    # 相机空间下的法线
-    normal = normal @ viewpoint_camera.world_view_transform[:3, :3]
+    # 原始法线计算（带残差）
+    normal, delta_normal = pc.get_normal(normal1, normal2, scaling, rot, dir_pp_normalized=dir_pp_normalized, return_delta=True) # (N, 3) 
+
     delta_normal_norm = delta_normal.norm(dim=1, keepdim=True)   
 
-    specular  = specular # (N*k, 3)
-    roughness = roughness # (N*k, 1)
-
-    # print("==============shape=====================")
-    # print(gb_pos.shape)
-    # print(normal.shape)
-    # print(diffuse_color.shape)
-    # print(specular.shape)
-    # print(roughness.shape)
-    # print(view_pos.shape)
-    # print("==============shape=====================")
+    specular = specular # (N, 3)
+    roughness = roughness # (N, 1)
 
     if pbr:
-        color, brdf_pkg = pc.brdf_mlp.shade(gb_pos[None, None, ...], normal[None, None, ...].detach(), diffuse_color[None, None, ...], specular[None, None, ...], roughness[None, None, ...], view_pos[None, None, ...])
-    # color = diffuse_color
-    # print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~",color.shape)  # 必须为 [1,1,N,3]
-    # colors_precomp = color.squeeze() # (N, 3)
-    # diffuse_color = brdf_pkg['diffuse'].squeeze() # (N, 3) 
-    # specular_color = brdf_pkg['specular'].squeeze() # (N, 3) 
+        color, brdf_pkg = pc.brdf_mlp.shade(gb_pos[None, None, ...], normal[None, None, ...], diffuse_color[None, None, ...], specular[None, None, ...], roughness[None, None, ...], view_pos[None, None, ...])
 
-    # if pc.brdf_dim>0:
-    #     # 残差色
-    #     shs_view = pc.get_brdf_features.view(-1, 3, (pc.brdf_dim+1)**2)
-        
-    #     # 视角方向
-    #     dir_pp = (xyz - viewpoint_camera.camera_center.repeat(xyz.shape[0], 1)) 
-    #     dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-    #     sh2rgb = eval_sh(pc.brdf_dim, shs_view, dir_pp_normalized)
-    #     color_delta = sh2rgb
-    #     colors_precomp += color_delta
+    # 相机空间下的法线
+    # normal = normal @ viewpoint_camera.world_view_transform[:3, :3]
 
-
+    # 修改后（压缩维度 + 恢复梯度）
+    if pbr:
+        colors_precomp = color.squeeze()  # [1,1,N,3] -> [N,3]
+    else:
+        colors_precomp = diffuse_color
 
     screenspace_points = torch.zeros_like(xyz, dtype=pc.get_anchor.dtype, requires_grad=True, device="cuda") + 0
     if retain_grad:
@@ -269,35 +235,9 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
     
-    # 修改后（压缩维度 + 恢复梯度）
-    if pbr:
-        colors_precomp = color.squeeze()  # [1,1,N,3] -> [N,3]
-    else:
-        colors_precomp = diffuse_color
-    # Rasterize visible Gaussians to image, obtain their radii (on screen). 
-    # rendered_image, radii = rasterizer(
-    #     means3D = xyz,
-    #     means2D = screenspace_points,
-    #     shs = None,
-    #     colors_precomp = colors_precomp,  
-    #     opacities = opacity,
-    #     scales = scaling,
-    #     rotations = rot,
-    #     cov3D_precomp = None)
-    
-    # 渲染法线图
-    # Calculate Gaussians projected depth
-    # p_hom = torch.cat([xyz, torch.ones_like(xyz[...,:1])], -1).unsqueeze(-1)
-    # p_view = torch.matmul(viewpoint_camera.world_view_transform.transpose(0,1), p_hom)
-    # p_view = p_view[...,:3,:]
-    # depth = p_view.squeeze()[...,2:3]
-    # depth = depth.repeat(1,3)
-
-
     render_extras = {}
-   
-    normal_normed = 0.5*normal + 0.5  # range (-1, 1) -> (0, 1)
-    render_extras.update({"normal": normal_normed})
+    # normal_normed = 0.5*normal + 0.5  # range (-1, 1) -> (0, 1)
+    # render_extras.update({"normal": normal_normed})
     if delta_normal_norm is not None:
         render_extras.update({"delta_normal_norm": delta_normal_norm.repeat(1, 3)})
    
@@ -316,7 +256,7 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
             cov3D_precomp = None)[0]
         out_extras[k] = image   
 
-    out_extras["normal"] = (out_extras["normal"] - 0.5) * 2. # range (0, 1) -> (-1, 1)
+    #out_extras["normal"] = (out_extras["normal"] - 0.5) * 2. # range (0, 1) -> (-1, 1)
     
     
     r3dg_raster_settings = RasterSettings(
@@ -356,44 +296,16 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         cov3D_precomp=None,
         features=features,
     )
-
-    # Rasterize visible Gaussians to alpha mask image. 
-    # raster_settings_alpha = GaussianRasterizationSettings(
-    #         image_height=int(viewpoint_camera.image_height),
-    #         image_width=int(viewpoint_camera.image_width),
-    #         tanfovx=tanfovx,
-    #         tanfovy=tanfovy,
-    #         bg=torch.tensor([0,0,0], dtype=torch.float32, device="cuda"),
-    #         scale_modifier=scaling_modifier,
-    #         viewmatrix=viewpoint_camera.world_view_transform,
-    #         projmatrix=viewpoint_camera.full_proj_transform,
-    #         sh_degree=1,
-    #         campos=viewpoint_camera.camera_center,
-    #         prefiltered=False,
-    #         debug=pipe.debug
-    #     )
-    # rasterizer_alpha = GaussianRasterizer(raster_settings=raster_settings_alpha)
-    # alpha = torch.ones_like(xyz) 
-
-
-    # out_extras["alpha"] =  rasterizer_alpha(
-    #     means3D = xyz,
-    #     means2D = screenspace_points,
-    #     shs = None,
-    #     colors_precomp = alpha,
-    #     opacities = opacity,
-    #     scales = scaling,
-    #     rotations = rot,
-    #     cov3D_precomp = None)[0]
+    # mask = num_contrib > 0
+    # rendered_feature = rendered_feature / rendered_opacity.clamp_min(1e-5) * mask
+    # rendered_depth = rendered_depth / rendered_opacity.clamp_min(1e-5) * mask
     
-    # Render normal from depth image, and alpha blend with the background. 
-    # 渲染法线图
-    # out_extras["normal_ref"] = render_normal(viewpoint_cam=viewpoint_camera, depth=out_extras['depth'][0], bg_color=bg_color, alpha=out_extras["alpha"][0])
+    rendered_normal, rendered_depth, rendered_depth2 = torch.split(rendered_feature, [3, 1, 1], dim=0)
+
+    out_extras["normal"] = rendered_normal
     out_extras["normal_ref"] = rendered_pseudo_normal
     out_extras["alpha"] = rendered_opacity
     out_extras["depth"] = rendered_depth
-    # normalize_normal_inplace(out_extras["normal"], out_extras["alpha"][0])
-    # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
 
     if is_training:
         out = {"render": rendered_image,
@@ -471,4 +383,3 @@ def prefilter_voxel(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch
         cov3D_precomp = cov3D_precomp)
 
     return radii_pure > 0
-

@@ -187,16 +187,16 @@ class GaussianModel:
         # 定义两个 MLP 分别用于生成 _normals 和 _normals2
         self.mlp_normal1 = nn.Sequential(
             nn.Linear(feat_dim+3, feat_dim),
-            #  nn.ReLU(True),
+            nn.ReLU(True),
             nn.Linear(feat_dim, 3 * n_offsets),
-            #  nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
+            nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
         ).cuda()
 
         self.mlp_normal2 = nn.Sequential(
             nn.Linear(feat_dim+3, feat_dim),
-            #  nn.ReLU(True),
+            nn.ReLU(True),
             nn.Linear(feat_dim, 3 * n_offsets),
-            #  nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
+            nn.Tanh()  # 使用 tanh 确保法线在 [-1, 1] 范围内
         ).cuda()
 
         # 定义 MLP 用于生成 _speculars
@@ -1131,12 +1131,14 @@ class GaussianModel:
         delta_normal = torch.stack([delta_normal1, delta_normal2], dim=-1) # (N, 3, 2)
         idx = torch.where(positive, 0, 1).long()[:,None,:].repeat(1, 3, 1) # (N, 3, 1)
         delta_normal = torch.gather(delta_normal, index=idx, dim=-1).squeeze(-1) # (N, 3)
-        normal =  delta_normal + normal_axis
+        normal =  normal_axis #delta_normal + normal_axis
         normal = normal/normal.norm(dim=1, keepdim=True) # (N, 3)
         if return_delta:
             return normal, delta_normal
         else:
             return normal
+        
+   
 
     # @property
     # def get_material_mlp(self):

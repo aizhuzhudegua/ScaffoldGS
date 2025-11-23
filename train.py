@@ -44,6 +44,9 @@ from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from gaussian_renderer import render_lighting
+from scene.cameras import Camera
+from diff_plane_rasterization import GaussianRasterizationSettings as PlaneGaussianRasterizationSettings
+from diff_plane_rasterization import GaussianRasterizer as PlaneGaussianRasterizer
 
 # torch.set_num_threads(32)
 lpips_fn = lpips.LPIPS(net='vgg').to('cuda')
@@ -79,6 +82,39 @@ def saveRuntimeCode(dst: str) -> None:
     shutil.copytree(log_dir, dst, ignore=shutil.ignore_patterns(*ignorePatterns))
     
     print('Backup Finished!')
+    
+def gen_virtul_cam(cam, trans_noise=1.0, deg_noise=15.0):
+    Rt = np.zeros((4, 4))
+    Rt[:3, :3] = cam.R.transpose()
+    Rt[:3, 3] = cam.T
+    Rt[3, 3] = 1.0
+    C2W = np.linalg.inv(Rt)
+
+    translation_perturbation = np.random.uniform(-trans_noise, trans_noise, 3)
+    rotation_perturbation = np.random.uniform(-deg_noise, deg_noise, 3)
+    rx, ry, rz = np.deg2rad(rotation_perturbation)
+    Rx = np.array([[1, 0, 0],
+                    [0, np.cos(rx), -np.sin(rx)],
+                    [0, np.sin(rx), np.cos(rx)]])
+    
+    Ry = np.array([[np.cos(ry), 0, np.sin(ry)],
+                    [0, 1, 0],
+                    [-np.sin(ry), 0, np.cos(ry)]])
+    
+    Rz = np.array([[np.cos(rz), -np.sin(rz), 0],
+                    [np.sin(rz), np.cos(rz), 0],
+                    [0, 0, 1]])
+    R_perturbation = Rz @ Ry @ Rx
+
+    C2W[:3, :3] = C2W[:3, :3] @ R_perturbation
+    C2W[:3, 3] = C2W[:3, 3] + translation_perturbation
+    Rt = np.linalg.inv(C2W)
+    virtul_cam = Camera(100000, Rt[:3, :3].transpose(), Rt[:3, 3], cam.FoVx, cam.FoVy,
+                        cam.image_width, cam.image_height,
+                        cam.image_path, cam.image_name, 100000,
+                        trans=np.array([0.0, 0.0, 0.0]), scale=1.0, 
+                        preload_img=False, data_device = "cuda")
+    return virtul_cam
     
 from torch.utils.tensorboard import SummaryWriter
 writer = SummaryWriter(log_dir='./logs')  # 日志保存目录
@@ -194,18 +230,18 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
         if iteration > 0:
             losses_extra['predicted_normal'] = predicted_normal_loss(render_pkg["normal"], render_pkg["normal_ref"], render_pkg["alpha"])
             writer.add_scalar('Loss/predicted_normal', losses_extra['predicted_normal'], iteration)
-            if "delta_normal_norm" in render_pkg.keys():
-                losses_extra['delta_reg'] = delta_normal_loss(render_pkg["delta_normal_norm"], render_pkg["alpha"])
-                writer.add_scalar('Loss/Delta_Reg', losses_extra['delta_reg'].item(), iteration)
-                losses_extra['zero_one'] = zero_one_loss(render_pkg["alpha"])
-                writer.add_scalar('Loss/Zero_One', losses_extra['zero_one'].item(), iteration)
+            # if "delta_normal_norm" in render_pkg.keys():
+            #     losses_extra['delta_reg'] = delta_normal_loss(render_pkg["delta_normal_norm"], render_pkg["alpha"])
+            #     writer.add_scalar('Loss/Delta_Reg', losses_extra['delta_reg'].item(), iteration)
+            #     losses_extra['zero_one'] = zero_one_loss(render_pkg["alpha"])
+            #     writer.add_scalar('Loss/Zero_One', losses_extra['zero_one'].item(), iteration)
 
 
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
 
         
-        if iteration % 100 == 0:
+        if iteration % 10 == 0:
             
             writer.add_image('Render/normal', render_pkg["normal"],global_step=iteration)
             writer.add_image('Render/normal_ref', render_pkg["normal_ref"],global_step=iteration)
@@ -231,10 +267,15 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
         #     tensor_to_pil(render_pkg["normal_ref"]).save(f'./output/debug/normal_ref_{iteration}.png')
         #     tensor_to_pil(render_pkg["alpha"]).save(f'./output/debug/alpha_{iteration}.png')
 
+        
 
         ssim_loss = (1.0 - ssim(image, gt_image))
         scaling_reg = scaling.prod(dim=1).mean()
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * ssim_loss + 0.001*scaling_reg
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * ssim_loss #+ 0.001*scaling_reg
+
+        sorted_scale, _ = torch.sort(scaling, dim=-1)
+        min_scale_loss = sorted_scale[...,0]
+        loss +=  10.0 * min_scale_loss.mean()
 
         for k in losses_extra.keys():
             key = f'lambda_{k}'

@@ -108,8 +108,8 @@ class OptimizationParams(ParamGroup):
         self.position_lr_delay_mult = 0.01
         self.position_lr_max_steps = 30_000
         
-        self.offset_lr_init = 0.01
-        self.offset_lr_final = 0.0001
+        self.offset_lr_init = 0.00016 #0.01
+        self.offset_lr_final = 0.0000016 #0.0001
         self.offset_lr_delay_mult = 0.01
         self.offset_lr_max_steps = 30_000
 
@@ -119,22 +119,17 @@ class OptimizationParams(ParamGroup):
         self.rotation_lr = 0.002
         
         
-        self.mlp_opacity_lr_init = 0.002
+        self.mlp_opacity_lr_init = 0.05 # 0.002
         self.mlp_opacity_lr_final = 0.00002  
         self.mlp_opacity_lr_delay_mult = 0.01
         self.mlp_opacity_lr_max_steps = 30_000
 
-        self.mlp_cov_lr_init = 0.004
-        self.mlp_cov_lr_final = 0.004
+        self.mlp_cov_lr_init = 0.001 # 0.004
+        self.mlp_cov_lr_final = 0.0001 # 0.004
         self.mlp_cov_lr_delay_mult = 0.01
         self.mlp_cov_lr_max_steps = 30_000
         
-        self.mlp_color_lr_init = 0.008
-        self.mlp_color_lr_final = 0.00005
-        self.mlp_color_lr_delay_mult = 0.01
-        self.mlp_color_lr_max_steps = 30_000
-
-        self.mlp_color_lr_init = 0.008
+        self.mlp_color_lr_init = 0.00025 # 0.008
         self.mlp_color_lr_final = 0.00005
         self.mlp_color_lr_delay_mult = 0.01
         self.mlp_color_lr_max_steps = 30_000
@@ -147,22 +142,22 @@ class OptimizationParams(ParamGroup):
 
         # 额外mlp的学习率 ------------------
         self.mlp_specular_lr_init = 0.002
-        self.mlp_specular_lr_final = 0.00002  
+        self.mlp_specular_lr_final = 0.002 # 0.00002  
         self.mlp_specular_lr_delay_mult = 0.01
         self.mlp_specular_lr_max_steps = 30_000
 
         self.mlp_roughness_lr_init = 0.002
-        self.mlp_roughness_lr_final = 0.00002  
+        self.mlp_roughness_lr_final = 0.002 # 0.00002  
         self.mlp_roughness_lr_delay_mult = 0.01
         self.mlp_roughness_lr_max_steps = 30_000
 
         self.mlp_normal1_lr_init = 0.002
-        self.mlp_normal1_lr_final = 0.00002  
+        self.mlp_normal1_lr_final = 0.002 # 0.00002  
         self.mlp_normal1_lr_delay_mult = 0.01
         self.mlp_normal1_lr_max_steps = 30_000
 
         self.mlp_normal2_lr_init = 0.002
-        self.mlp_normal2_lr_final = 0.00002  
+        self.mlp_normal2_lr_final = 0.002 # 0.00002  
         self.mlp_normal2_lr_delay_mult = 0.01
         self.mlp_normal2_lr_max_steps = 30_000
 
@@ -171,8 +166,8 @@ class OptimizationParams(ParamGroup):
         self.mlp_features_rest_lr_delay_mult = 0.01
         self.mlp_features_rest_lr_max_steps = 30_000
 
-        self.mlp_brdf_lr_init = 1e-4
-        self.mlp_brdf_lr_final = 5e-6
+        self.mlp_brdf_lr_init = 1.6e-3
+        self.mlp_brdf_lr_final = 1.6e-5
         self.mlp_brdf_lr_delay_mult = 0.01
         # 额外mlp的学习率 ------------------
 
@@ -198,7 +193,7 @@ class OptimizationParams(ParamGroup):
         self.normal_reg_from_iter = 0
         self.normal_reg_util_iter = 30_000
         self.lambda_zero_one = 1e-3
-        self.lambda_predicted_normal = 0.2 # 0.01
+        self.lambda_predicted_normal = 2e-1 # 0.01
         self.lambda_delta_reg = 1e-3
 
         
