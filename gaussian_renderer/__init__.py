@@ -22,6 +22,7 @@ from .r3dg_rasterization import (
     GaussianRasterizationSettings as RasterSettings,
     GaussianRasterizer as Rasterizer
 )
+import torch.nn.functional as F
 
 def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask=None, is_training=False):
     ## view frustum filtering for acceleration    
@@ -282,23 +283,16 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     out_extras = {
         k: v for k, v in zip(render_extras.keys(), out_values)
     }
-    out_extras["alpha"] = rendered_opacity
     out_extras["depth"] = rendered_depth
     out_extras["rendered_surface_xyz"] = rendered_surface_xyz
     out_extras["distortion"] = distortion
-    # mask = num_contrib > 0
-    # rendered_feature = rendered_feature / rendered_opacity.clamp_min(1e-5) * mask
-    # rendered_depth = rendered_depth / rendered_opacity.clamp_min(1e-5) * mask
-    
-    rendered_normal, rendered_depth, rendered_depth2 = torch.split(rendered_feature, [3, 1, 1], dim=0)
-
-    out_extras["normal"] = rendered_normal
+    out_extras["normal"] = (out_extras["normal"] - 0.5) * 2
     out_extras["normal_ref"] = rendered_pseudo_normal
     out_extras["alpha"] = rendered_opacity
-    out_extras["depth"] = rendered_depth
 
+    defer_normal = F.normalize(out_extras['normal'].permute(1, 2, 0), dim=-1).reshape(1, 1, -1, 3)
     rendered_image, brdf_pkg = pc.brdf_mlp.shade(out_extras['pos'].permute(1, 2, 0).reshape(1, 1, -1, 3), 
-                                            rendered_normal, 
+                                            defer_normal, 
                                             out_extras['diffuse'].permute(1, 2, 0).reshape(1, 1, -1, 3), 
                                             out_extras['specular'].permute(1, 2, 0).reshape(1, 1, -1, 3), 
                                             out_extras['roughness'].permute(1, 2, 0)[:, :, 0].reshape(1, 1, -1, 1), 
