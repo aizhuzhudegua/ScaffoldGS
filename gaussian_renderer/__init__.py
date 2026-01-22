@@ -177,8 +177,6 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     else:
         xyz, diffuse_color, opacity, scaling, rot, normal1, normal2, specular, roughness, anchor_indices_valid = generate_neural_gaussians(viewpoint_camera, pc, visible_mask, is_training=is_training)
 
-
-    # 执行这里的shading
     gb_pos = xyz # (N, 3)，N为有效高斯数量
     view_pos = viewpoint_camera.camera_center.repeat(gb_pos.shape[0], 1) # (N, 3)
 
@@ -188,23 +186,19 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     # 原始法线计算（带残差）
     normal, delta_normal = pc.get_normal(normal1, normal2, scaling, rot, dir_pp_normalized=dir_pp_normalized, return_delta=True) # (N, 3) 
-
-    delta_normal_norm = delta_normal.norm(dim=1, keepdim=True)   
-
     specular = specular # (N, 3)
     roughness = roughness # (N, 1)
-
-    if pbr:
-        color, brdf_pkg = pc.brdf_mlp.shade(gb_pos[None, None, ...], normal[None, None, ...], diffuse_color[None, None, ...], specular[None, None, ...], roughness[None, None, ...], view_pos[None, None, ...])
+    # if pbr:
+    #     color, brdf_pkg = pc.brdf_mlp.shade(gb_pos[None, None, ...], normal[None, None, ...], diffuse_color[None, None, ...], specular[None, None, ...], roughness[None, None, ...], view_pos[None, None, ...])
 
     # 相机空间下的法线
     # normal = normal @ viewpoint_camera.world_view_transform[:3, :3]
 
     # 修改后（压缩维度 + 恢复梯度）
-    if pbr:
-        colors_precomp = color.squeeze()  # [1,1,N,3] -> [N,3]
-    else:
-        colors_precomp = diffuse_color
+    # if pbr:
+    #     colors_precomp = color.squeeze()  # [1,1,N,3] -> [N,3]
+    # else:
+    # colors_precomp = diffuse_color
 
     screenspace_points = torch.zeros_like(xyz, dtype=pc.get_anchor.dtype, requires_grad=True, device="cuda") + 0
     if retain_grad:
@@ -217,44 +211,27 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # Set up rasterization configuration
     tanfovx = math.tan(viewpoint_camera.FoVx * 0.5)
     tanfovy = math.tan(viewpoint_camera.FoVy * 0.5)
-
-    raster_settings = GaussianRasterizationSettings(
-        image_height=int(viewpoint_camera.image_height),
-        image_width=int(viewpoint_camera.image_width),
-        tanfovx=tanfovx,
-        tanfovy=tanfovy,
-        bg=bg_color,
-        scale_modifier=scaling_modifier,
-        viewmatrix=viewpoint_camera.world_view_transform,
-        projmatrix=viewpoint_camera.full_proj_transform,
-        sh_degree=1,
-        campos=viewpoint_camera.camera_center,
-        prefiltered=False,
-        debug=pipe.debug
-    )
-
-    rasterizer = GaussianRasterizer(raster_settings=raster_settings)
     
-    render_extras = {}
+    # render_extras = {}
     # normal_normed = 0.5*normal + 0.5  # range (-1, 1) -> (0, 1)
     # render_extras.update({"normal": normal_normed})
-    if delta_normal_norm is not None:
-        render_extras.update({"delta_normal_norm": delta_normal_norm.repeat(1, 3)})
+    # if delta_normal_norm is not None:
+    #     render_extras.update({"delta_normal_norm": delta_normal_norm.repeat(1, 3)})
    
     
-    out_extras = {}
-    for k in render_extras.keys():
-        if render_extras[k] is None: continue
-        image = rasterizer(
-            means3D = xyz,
-            means2D = screenspace_points,
-            shs = None,
-            colors_precomp = render_extras[k],
-            opacities = opacity,
-            scales = scaling,
-            rotations = rot,
-            cov3D_precomp = None)[0]
-        out_extras[k] = image   
+    # out_extras = {}
+    # for k in render_extras.keys():
+    #     if render_extras[k] is None: continue
+    #     image = rasterizer(
+    #         means3D = xyz,
+    #         means2D = screenspace_points,
+    #         shs = None,
+    #         colors_precomp = render_extras[k],
+    #         opacities = opacity,
+    #         scales = scaling,
+    #         rotations = rot,
+    #         cov3D_precomp = None)[0]
+    #     out_extras[k] = image   
 
     #out_extras["normal"] = (out_extras["normal"] - 0.5) * 2. # range (0, 1) -> (-1, 1)
     
@@ -277,25 +254,38 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         computer_pseudo_normal=True,
         debug=pipe.debug
     )
+    rasterizer = GaussianRasterizer(raster_settings=r3dg_raster_settings)
 
-    xyz_homo = torch.cat([xyz, torch.ones_like(xyz[:, :1])], dim=-1)
-    depths = (xyz_homo @ viewpoint_camera.world_view_transform)[:, 2:3]
-    depths2 = depths.square()
-    features = torch.cat([normal, depths, depths2], dim=-1)
-    r3dg_rasterizer = Rasterizer(raster_settings=r3dg_raster_settings)
-     # Rasterize visible Gaussians to image, obtain their radii (on screen).
-    (num_rendered, num_contrib, rendered_image, rendered_opacity, rendered_depth,
-     rendered_feature, rendered_pseudo_normal, rendered_surface_xyz, weights, radii) = r3dg_rasterizer(
-        means3D=xyz,
-        means2D=screenspace_points,
-        shs=None,
-        colors_precomp=colors_precomp,
-        opacities=opacity,
-        scales=scaling,
-        rotations=rot,
-        cov3D_precomp=None,
-        features=features,
-    )
+    normal_normed = 0.5*normal + 0.5  # range (-1, 1) -> (0, 1)
+    render_extras = {"normal": normal_normed}
+    render_extras.update({
+        "pos": xyz,
+        "diffuse": diffuse_color, 
+        "specular": specular, 
+        "roughness": roughness, 
+        })
+    
+    features = torch.cat([f for f in render_extras.values()], dim=-1)
+    out_extras = {}
+    (_, _, rendered_image, rendered_opacity, rendered_depth,
+     rendered_feature, rendered_pseudo_normal, rendered_surface_xyz, distortion, radii) = rasterizer(
+        means3D = xyz,
+        means2D = screenspace_points,
+        shs = None,
+        colors_precomp = torch.ones_like(screenspace_points),
+        opacities = opacity,
+        scales = scaling,
+        rotations = rot,
+        cov3D_precomp = None, 
+        features=features)
+    out_values = torch.split(rendered_feature, [i.shape[1] for i in render_extras.values()])
+    out_extras = {
+        k: v for k, v in zip(render_extras.keys(), out_values)
+    }
+    out_extras["alpha"] = rendered_opacity
+    out_extras["depth"] = rendered_depth
+    out_extras["rendered_surface_xyz"] = rendered_surface_xyz
+    out_extras["distortion"] = distortion
     # mask = num_contrib > 0
     # rendered_feature = rendered_feature / rendered_opacity.clamp_min(1e-5) * mask
     # rendered_depth = rendered_depth / rendered_opacity.clamp_min(1e-5) * mask
@@ -306,6 +296,15 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     out_extras["normal_ref"] = rendered_pseudo_normal
     out_extras["alpha"] = rendered_opacity
     out_extras["depth"] = rendered_depth
+
+    rendered_image, brdf_pkg = pc.brdf_mlp.shade(out_extras['pos'].permute(1, 2, 0).reshape(1, 1, -1, 3), 
+                                            rendered_normal, 
+                                            out_extras['diffuse'].permute(1, 2, 0).reshape(1, 1, -1, 3), 
+                                            out_extras['specular'].permute(1, 2, 0).reshape(1, 1, -1, 3), 
+                                            out_extras['roughness'].permute(1, 2, 0)[:, :, 0].reshape(1, 1, -1, 1), 
+                                        viewpoint_camera.camera_center[None, None, :].repeat(
+                                            int(viewpoint_camera.image_height), int(viewpoint_camera.image_width), 1
+                                            ).reshape(1, 1, -1, 3))
 
     if is_training:
         out = {"render": rendered_image,

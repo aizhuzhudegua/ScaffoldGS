@@ -83,39 +83,6 @@ def saveRuntimeCode(dst: str) -> None:
     
     print('Backup Finished!')
     
-def gen_virtul_cam(cam, trans_noise=1.0, deg_noise=15.0):
-    Rt = np.zeros((4, 4))
-    Rt[:3, :3] = cam.R.transpose()
-    Rt[:3, 3] = cam.T
-    Rt[3, 3] = 1.0
-    C2W = np.linalg.inv(Rt)
-
-    translation_perturbation = np.random.uniform(-trans_noise, trans_noise, 3)
-    rotation_perturbation = np.random.uniform(-deg_noise, deg_noise, 3)
-    rx, ry, rz = np.deg2rad(rotation_perturbation)
-    Rx = np.array([[1, 0, 0],
-                    [0, np.cos(rx), -np.sin(rx)],
-                    [0, np.sin(rx), np.cos(rx)]])
-    
-    Ry = np.array([[np.cos(ry), 0, np.sin(ry)],
-                    [0, 1, 0],
-                    [-np.sin(ry), 0, np.cos(ry)]])
-    
-    Rz = np.array([[np.cos(rz), -np.sin(rz), 0],
-                    [np.sin(rz), np.cos(rz), 0],
-                    [0, 0, 1]])
-    R_perturbation = Rz @ Ry @ Rx
-
-    C2W[:3, :3] = C2W[:3, :3] @ R_perturbation
-    C2W[:3, 3] = C2W[:3, 3] + translation_perturbation
-    Rt = np.linalg.inv(C2W)
-    virtul_cam = Camera(100000, Rt[:3, :3].transpose(), Rt[:3, 3], cam.FoVx, cam.FoVy,
-                        cam.image_width, cam.image_height,
-                        cam.image_path, cam.image_name, 100000,
-                        trans=np.array([0.0, 0.0, 0.0]), scale=1.0, 
-                        preload_img=False, data_device = "cuda")
-    return virtul_cam
-    
 from torch.utils.tensorboard import SummaryWriter
 writer = SummaryWriter(log_dir='./logs')  # 日志保存目录
 def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, wandb=None, logger=None, ply_path=None):
@@ -165,24 +132,8 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
     print("normal_reg_from_iter:" ,opt.normal_reg_from_iter)
 
     for iteration in range(first_iter, opt.iterations + 1):        
-        # network gui not available in scaffold-gs yet
-        if network_gui.conn == None:
-            network_gui.try_connect()
-        while network_gui.conn != None:
-            try:
-                net_image_bytes = None
-                custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
-                if custom_cam != None:
-                    net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer)["render"]
-                    net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
-                network_gui.send(net_image_bytes, dataset.source_path)
-                if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
-                    break
-            except Exception as e:
-                network_gui.conn = None
-
+       
         iter_start.record()
-
         gaussians.update_learning_rate(iteration)
 
         bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
